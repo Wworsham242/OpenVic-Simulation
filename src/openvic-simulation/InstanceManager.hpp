@@ -6,6 +6,7 @@
 
 #include "openvic-simulation/console/ConsoleInstance.hpp"
 #include "openvic-simulation/core/memory/Vector.hpp"
+#include "openvic-simulation/core/simulation/SimulationTimeline.hpp"
 #include "openvic-simulation/country/CountryInstanceDeps.hpp"
 #include "openvic-simulation/country/CountryInstanceManager.hpp"
 #include "openvic-simulation/diplomacy/CountryRelation.hpp"
@@ -61,6 +62,7 @@ namespace OpenVic {
 		 * e.g. if we want to remove military units from the province they're in when they're destructed. */
 		MapInstance PROPERTY_REF(map_instance);
 		SimulationClock PROPERTY_REF(simulation_clock);
+		SimulationTimeline simulation_timeline;
 		ConsoleInstance PROPERTY_REF(console_instance);
 
 		bool PROPERTY_CUSTOM_PREFIX(game_instance_setup, is, false);
@@ -100,6 +102,10 @@ namespace OpenVic {
 		void force_tick_and_update();
 
 		bool set_today_and_update(Date new_today);
+
+		[[nodiscard]] SimTime get_simulation_time() const {
+			return simulation_timeline.current_time();
+		}
 
 		template<typename T, typename... Args>
 		bool queue_game_action(Args&&... args) {

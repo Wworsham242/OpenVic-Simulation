@@ -183,6 +183,16 @@ void InstanceManager::update_gamestate() {
  */
 void InstanceManager::tick() {
 
+	// FOUNDATION-003 compatibility seam:
+	// legacy Victoria execution still advances one Date day at a time, while the
+	// generalized engine timeline records 24 unitless ticks per successful legacy day.
+	// No gameplay subsystem reads simulation_timeline yet.
+	static constexpr int64_t LEGACY_DAY_SIMULATION_TICKS = 24;
+	if (!simulation_timeline.advance(LEGACY_DAY_SIMULATION_TICKS)) {
+		spdlog::error_s("Simulation timeline could not advance; refusing legacy daily tick.");
+		return;
+	}
+
 	today++;
 
 	SPDLOG_INFO("Tick: {}", today);
