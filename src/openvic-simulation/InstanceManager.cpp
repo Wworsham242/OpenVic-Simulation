@@ -387,3 +387,39 @@ bool InstanceManager::queue_game_action(game_action_t&& game_action) {
 	game_action_queue.emplace_back(std::move(game_action));
 	return true;
 }
+CommandAdmissionResult InstanceManager::queue_authorized_legacy_mobilise(
+	std::string actor_id,
+	std::string jurisdiction_id,
+	country_index_t country_index,
+	bool new_is_mobilised
+) {
+	if (currently_executing_game_actions) {
+		spdlog::error_s(
+			"Attempted to submit authorized mobilise command while executing game actions."
+		);
+		return CommandAdmissionResult::invalid_request;
+	}
+
+	std::vector<uint8_t> const payload =
+		LegacyMobiliseCommand::encode(country_index, new_is_mobilised);
+
+	CommandAdmissionResult const admission = submit_authorized_command(
+		std::move(actor_id),
+		LegacyMobiliseCommand::COMMAND_TYPE,
+		std::move(jurisdiction_id),
+		payload
+	);
+
+	if (admission != CommandAdmissionResult::accepted) {
+		return admission;
+	}
+
+	if (!queue_game_action<set_mobilise_argument_t>(country_index, new_is_mobilised)) {
+		spdlog::error_s(
+			"Authorized mobilise command was accepted but legacy GameAction queueing failed."
+		);
+		return CommandAdmissionResult::invalid_request;
+	}
+
+	return CommandAdmissionResult::accepted;
+}

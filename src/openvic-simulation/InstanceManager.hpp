@@ -7,6 +7,7 @@
 #include "openvic-simulation/console/ConsoleInstance.hpp"
 #include "openvic-simulation/core/memory/Vector.hpp"
 #include "openvic-simulation/core/simulation/AuthorityRegistry.hpp"
+#include "openvic-simulation/core/simulation/LegacyMobiliseCommand.hpp"
 #include "openvic-simulation/core/simulation/SimulationTimeline.hpp"
 #include "openvic-simulation/country/CountryInstanceDeps.hpp"
 #include "openvic-simulation/country/CountryInstanceManager.hpp"
@@ -157,5 +158,11 @@ namespace OpenVic {
 			);
 		}
 		bool queue_game_action(game_action_t&& game_action);
+		[[nodiscard]] CommandAdmissionResult queue_authorized_legacy_mobilise(
+			std::string actor_id,
+			std::string jurisdiction_id,
+			country_index_t country_index,
+			bool new_is_mobilised
+		);
 	};
 }
