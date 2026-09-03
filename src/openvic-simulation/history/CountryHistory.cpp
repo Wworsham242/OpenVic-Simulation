@@ -289,6 +289,12 @@ bool CountryHistoryMap::_load_history_entry(
 			return ret;
 		},
 		"colonial_points", ZERO_OR_ONE, expect_fixed_point(assign_variable_callback(entry.colonial_points)),
+		"fiscal_tax_base_coverage", ZERO_OR_ONE,
+			expect_fixed_point(assign_variable_callback(entry.fiscal_tax_base_coverage)),
+		"fiscal_compliance_rate", ZERO_OR_ONE,
+			expect_fixed_point(assign_variable_callback(entry.fiscal_compliance_rate)),
+		"fiscal_collection_execution", ZERO_OR_ONE,
+			expect_fixed_point(assign_variable_callback(entry.fiscal_collection_execution)),
 		"set_country_flag", ZERO_OR_MORE, expect_identifier_or_string(_flag_callback(entry.country_flags, true)),
 		"clr_country_flag", ZERO_OR_MORE, expect_identifier_or_string(_flag_callback(entry.country_flags, false)),
 		"set_global_flag", ZERO_OR_MORE, expect_identifier_or_string(_flag_callback(entry.global_flags, true)),

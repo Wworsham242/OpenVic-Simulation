@@ -234,6 +234,12 @@ bool CountryInstanceManager::apply_history_to_countries(InstanceManager& instanc
 							map_instance
 						);
 
+						// VERTICAL-004: apply only fiscal-capacity fields present in this
+						// dated history entry. Missing fields preserve prior/default values.
+						entry->get_fiscal_collection_history().apply_to(
+							country_instance.get_fiscal_collection_capacity()
+						);
+
 						if (entry->get_initial_oob() != nullptr) {
 							oob_history_entry = entry.get();
 						}

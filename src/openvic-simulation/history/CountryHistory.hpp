@@ -3,6 +3,7 @@
 #include <optional>
 
 #include "openvic-simulation/core/memory/SmartPtr.hpp"
+#include "openvic-simulation/country/FiscalCollectionHistory.hpp"
 #include "openvic-simulation/history/HistoryMap.hpp"
 #include "openvic-simulation/types/Date.hpp"
 #include "openvic-simulation/types/IndexedFlatMap.hpp"
@@ -54,6 +55,22 @@ namespace OpenVic {
 		std::optional<fixed_point_t> PROPERTY(nonstate_culture_literacy);
 		std::optional<bool> PROPERTY_CUSTOM_PREFIX(releasable_vassal, is);
 		std::optional<fixed_point_t> PROPERTY(colonial_points);
+
+		// VERTICAL-004: modern fiscal-capacity scenario bootstrap.
+		std::optional<fixed_point_t> PROPERTY(fiscal_tax_base_coverage);
+		std::optional<fixed_point_t> PROPERTY(fiscal_compliance_rate);
+		std::optional<fixed_point_t> PROPERTY(fiscal_collection_execution);
+
+	public:
+		[[nodiscard]] FiscalCollectionHistory get_fiscal_collection_history() const {
+			return FiscalCollectionHistory {
+				.tax_base_coverage = fiscal_tax_base_coverage,
+				.compliance_rate = fiscal_compliance_rate,
+				.collection_execution = fiscal_collection_execution
+			};
+		}
+
+	private:
 		// True for set, false for clear
 		string_map_t<bool> PROPERTY(country_flags);
 		string_map_t<bool> PROPERTY(global_flags);
