@@ -9,6 +9,7 @@
 #include "openvic-simulation/core/simulation/AuthorityRegistry.hpp"
 #include "openvic-simulation/core/simulation/LegacyMobiliseCommand.hpp"
 #include "openvic-simulation/core/simulation/LiveCommandTimelineSnapshot.hpp"
+#include "openvic-simulation/core/simulation/PositionSessionBootstrap.hpp"
 #include "openvic-simulation/core/simulation/SimulationTimeline.hpp"
 #include "openvic-simulation/country/CountryInstanceDeps.hpp"
 #include "openvic-simulation/country/CountryInstanceManager.hpp"
@@ -24,6 +25,7 @@
 #include "openvic-simulation/misc/GameAction.hpp"
 #include "openvic-simulation/misc/SimulationClock.hpp"
 #include "openvic-simulation/politics/PoliticsInstanceManager.hpp"
+#include "openvic-simulation/player/PlayerManager.hpp"
 #include "openvic-simulation/population/PopDeps.hpp"
 #include "openvic-simulation/population/PopsAggregateDeps.hpp"
 #include "openvic-simulation/types/Date.hpp"
@@ -66,6 +68,7 @@ namespace OpenVic {
 		MapInstance PROPERTY_REF(map_instance);
 		SimulationClock PROPERTY_REF(simulation_clock);
 		SimulationTimeline simulation_timeline;
+		PlayerManager PROPERTY_REF(player_manager);
 
 		// FOUNDATION-009: live generalized command-admission state.
 		AuthorityRegistry authority_registry;
@@ -118,6 +121,52 @@ namespace OpenVic {
 		/// Register one generalized actor authority profile.
 		[[nodiscard]] bool register_actor_authority(ActorAuthorityProfile profile) {
 			return authority_registry.register_profile(std::move(profile));
+		}
+		[[nodiscard]] bool bootstrap_position_occupancy(
+			PositionOccupancy occupancy,
+			std::vector<AuthorityGrant> grants
+		) {
+			if (is_game_session_started()) {
+				return false;
+			}
+			return PositionSessionBootstrap::configure(
+				player_manager,
+				authority_registry,
+				std::move(occupancy),
+				std::move(grants)
+			);
+		}
+
+		[[nodiscard]] CommandAdmissionResult submit_occupied_position_command(
+			std::string command_type,
+			std::vector<uint8_t> payload
+		) {
+			PositionOccupancy const* const occupancy = player_manager.get_position_occupancy();
+			if (occupancy == nullptr) {
+				return CommandAdmissionResult::invalid_request;
+			}
+			return submit_authorized_command(
+				std::string { occupancy->authority_actor_id() },
+				std::move(command_type),
+				std::string { occupancy->jurisdiction_id() },
+				std::move(payload)
+			);
+		}
+
+		[[nodiscard]] CommandAdmissionResult queue_occupied_legacy_mobilise(
+			country_index_t country_index,
+			bool new_is_mobilised
+		) {
+			PositionOccupancy const* const occupancy = player_manager.get_position_occupancy();
+			if (occupancy == nullptr) {
+				return CommandAdmissionResult::invalid_request;
+			}
+			return queue_authorized_legacy_mobilise(
+				std::string { occupancy->authority_actor_id() },
+				std::string { occupancy->jurisdiction_id() },
+				country_index,
+				new_is_mobilised
+			);
 		}
 
 		/// Submit through generalized authority using authoritative simulation time.
