@@ -8,6 +8,7 @@
 #include "openvic-simulation/core/memory/Vector.hpp"
 #include "openvic-simulation/core/simulation/AuthorityRegistry.hpp"
 #include "openvic-simulation/core/simulation/LegacyMobiliseCommand.hpp"
+#include "openvic-simulation/core/simulation/LiveCommandTimelineSnapshot.hpp"
 #include "openvic-simulation/core/simulation/SimulationTimeline.hpp"
 #include "openvic-simulation/country/CountryInstanceDeps.hpp"
 #include "openvic-simulation/country/CountryInstanceManager.hpp"
@@ -147,6 +148,19 @@ namespace OpenVic {
 
 		[[nodiscard]] std::vector<CampaignCommandRecord> capture_accepted_command_log() const {
 			return ordered_command_runtime.capture_command_log();
+		}
+		[[nodiscard]] LiveCommandTimelineSnapshot capture_live_command_timeline_state() const {
+			return LiveCommandTimelineState::capture(simulation_timeline, ordered_command_runtime);
+		}
+
+		[[nodiscard]] bool restore_live_command_timeline_state(
+			LiveCommandTimelineSnapshot const& snapshot
+		) {
+			return LiveCommandTimelineState::restore(
+				snapshot,
+				simulation_timeline,
+				ordered_command_runtime
+			);
 		}
 		template<typename T, typename... Args>
 		bool queue_game_action(Args&&... args) {
