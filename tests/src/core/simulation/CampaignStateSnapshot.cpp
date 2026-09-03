@@ -63,6 +63,7 @@ namespace {
 					.submitted_at = SimTime::from_ticks(24),
 					.actor_id = "actor:fixture:a",
 					.command_type = "fixture.command.a",
+					.jurisdiction_id = "country:A",
 					.payload = { 1 }
 				},
 				CampaignCommandRecord {
@@ -70,6 +71,7 @@ namespace {
 					.submitted_at = SimTime::from_ticks(24),
 					.actor_id = "actor:fixture:b",
 					.command_type = "fixture.command.b",
+					.jurisdiction_id = "country:B",
 					.payload = { 2 }
 				},
 				CampaignCommandRecord {
@@ -77,6 +79,7 @@ namespace {
 					.submitted_at = SimTime::from_ticks(48),
 					.actor_id = "actor:fixture:c",
 					.command_type = "fixture.command.c",
+					.jurisdiction_id = "country:C",
 					.payload = { 3 }
 				}
 			},
@@ -112,6 +115,10 @@ TEST_CASE("Campaign checksum covers all composed durable dimensions", "[foundati
 	CHECK(changed.checksum() != baseline_checksum);
 
 	changed = baseline;
+	changed.command_log[0].jurisdiction_id = "country:Z";
+	CHECK(changed.checksum() != baseline_checksum);
+
+	changed = baseline;
 	changed.ecs_identity.slots[1].immutable = true;
 	CHECK(changed.checksum() != baseline_checksum);
 
@@ -141,6 +148,10 @@ TEST_CASE("Campaign canonical validation rejects ambiguous durable state", "[fou
 
 	bad = baseline;
 	bad.command_log[0].actor_id.clear();
+	CHECK_FALSE(bad.is_canonical());
+
+	bad = baseline;
+	bad.command_log[0].jurisdiction_id.clear();
 	CHECK_FALSE(bad.is_canonical());
 
 	bad = baseline;

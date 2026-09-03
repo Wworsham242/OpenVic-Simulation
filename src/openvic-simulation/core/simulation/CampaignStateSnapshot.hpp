@@ -31,6 +31,7 @@ struct CampaignCommandRecord {
 	SimTime submitted_at = SimTime::from_ticks(0);
 	std::string actor_id;
 	std::string command_type;
+	std::string jurisdiction_id;
 	std::vector<uint8_t> payload;
 
 	bool operator==(CampaignCommandRecord const&) const = default;
@@ -61,7 +62,8 @@ struct CampaignStateSnapshot {
 		}
 		for (std::size_t i = 0; i < command_log.size(); ++i) {
 			CampaignCommandRecord const& command = command_log[i];
-			if (command.sequence != i || command.actor_id.empty() || command.command_type.empty()) {
+			if (command.sequence != i || command.actor_id.empty()
+				|| command.command_type.empty() || command.jurisdiction_id.empty()) {
 				return false;
 			}
 		}
@@ -137,6 +139,7 @@ struct CampaignStateSnapshot {
 			hash = fold_u64(hash, static_cast<uint64_t>(command.submitted_at.ticks()));
 			hash = fold_string(hash, command.actor_id);
 			hash = fold_string(hash, command.command_type);
+			hash = fold_string(hash, command.jurisdiction_id);
 			hash = fold_u64(hash, static_cast<uint64_t>(command.payload.size()));
 			for (uint8_t byte : command.payload) {
 				hash = fold_byte(hash, byte);
@@ -153,6 +156,7 @@ struct CampaignStateSnapshot {
 		for (uint32_t index : ecs_identity.free_list) {
 			hash = fold_u64(hash, index);
 		}
+
 		return hash;
 	}
 };

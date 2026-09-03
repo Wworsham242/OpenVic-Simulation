@@ -1,7 +1,6 @@
 #include "openvic-simulation/core/simulation/OrderedCommandRuntime.hpp"
 
 #include <cstdint>
-#include <vector>
 
 #include <snitch/snitch_macros_check.hpp>
 #include <snitch/snitch_macros_test_case.hpp>
@@ -15,18 +14,21 @@ namespace {
 			SimTime::from_ticks(24),
 			"actor:executive:USA",
 			"policy.set_priority",
+			"country:USA",
 			{ 1, 2, 3 }
 		).has_value());
 		REQUIRE(runtime.accept(
 			SimTime::from_ticks(24),
 			"actor:central_bank:USA",
 			"monetary.set_target",
+			"country:USA",
 			{ 4, 5 }
 		).has_value());
 		REQUIRE(runtime.accept(
 			SimTime::from_ticks(48),
 			"actor:military_command:USA",
 			"force.set_readiness",
+			"theater:EUCOM",
 			{ 6 }
 		).has_value());
 		return runtime;
@@ -36,9 +38,9 @@ namespace {
 TEST_CASE("Accepted commands receive stable contiguous sequence", "[foundation][command][ordering]") {
 	OrderedCommandRuntime runtime;
 
-	auto a = runtime.accept(SimTime::from_ticks(5), "actor:a", "command.one", { 1 });
-	auto b = runtime.accept(SimTime::from_ticks(5), "actor:b", "command.two", { 2 });
-	auto c = runtime.accept(SimTime::from_ticks(1), "actor:c", "command.three", { 3 });
+	auto a = runtime.accept(SimTime::from_ticks(5), "actor:a", "command.one", "jurisdiction:a", { 1 });
+	auto b = runtime.accept(SimTime::from_ticks(5), "actor:b", "command.two", "jurisdiction:b", { 2 });
+	auto c = runtime.accept(SimTime::from_ticks(1), "actor:c", "command.three", "jurisdiction:c", { 3 });
 
 	REQUIRE(a.has_value());
 	REQUIRE(b.has_value());
@@ -47,21 +49,29 @@ TEST_CASE("Accepted commands receive stable contiguous sequence", "[foundation][
 	CHECK(*b == 1);
 	CHECK(*c == 2);
 
-	// Acceptance order is authoritative even if submitted_at values are non-monotonic.
 	const auto log = runtime.capture_command_log();
 	REQUIRE(log.size() == 3);
 	CHECK(log[0].actor_id == "actor:a");
 	CHECK(log[1].actor_id == "actor:b");
 	CHECK(log[2].actor_id == "actor:c");
+	CHECK(log[0].jurisdiction_id == "jurisdiction:a");
 }
 
 TEST_CASE("Human AI institution and military identities share same envelope", "[foundation][command][actors]") {
 	OrderedCommandRuntime runtime;
 
-	REQUIRE(runtime.accept(SimTime::from_ticks(1), "human:office:PM", "policy.propose", {}).has_value());
-	REQUIRE(runtime.accept(SimTime::from_ticks(1), "ai:office:PM", "policy.propose", {}).has_value());
-	REQUIRE(runtime.accept(SimTime::from_ticks(1), "institution:central_bank", "rate.review", {}).has_value());
-	REQUIRE(runtime.accept(SimTime::from_ticks(1), "military:theater_command", "plan.activate", {}).has_value());
+	REQUIRE(runtime.accept(
+		SimTime::from_ticks(1), "human:office:PM", "policy.propose", "country:GBR", {}
+	).has_value());
+	REQUIRE(runtime.accept(
+		SimTime::from_ticks(1), "ai:office:PM", "policy.propose", "country:GBR", {}
+	).has_value());
+	REQUIRE(runtime.accept(
+		SimTime::from_ticks(1), "institution:central_bank", "rate.review", "country:USA", {}
+	).has_value());
+	REQUIRE(runtime.accept(
+		SimTime::from_ticks(1), "military:theater_command", "plan.activate", "theater:EUCOM", {}
+	).has_value());
 
 	CHECK(runtime.accepted_command_count() == 4);
 }
@@ -124,6 +134,11 @@ TEST_CASE("Invalid command restore is transactional", "[foundation][command][val
 	CHECK_FALSE(runtime.restore(before_replay, bad_log));
 	CHECK(runtime.capture_command_log() == before_log);
 
+	bad_log = before_log;
+	bad_log[0].jurisdiction_id.clear();
+	CHECK_FALSE(runtime.restore(before_replay, bad_log));
+	CHECK(runtime.capture_command_log() == before_log);
+
 	auto bad_replay = before_replay;
 	bad_replay.replay_cursor = bad_replay.accepted_command_count + 1;
 	CHECK_FALSE(runtime.restore(bad_replay, before_log));
@@ -144,9 +159,10 @@ TEST_CASE("Command state composes canonically into campaign snapshot", "[foundat
 	CHECK(campaign.checksum() != baseline);
 }
 
-TEST_CASE("Command acceptance rejects missing actor or command type", "[foundation][command][validation]") {
+TEST_CASE("Command acceptance rejects missing required envelope fields", "[foundation][command][validation]") {
 	OrderedCommandRuntime runtime;
-	CHECK_FALSE(runtime.accept(SimTime::from_ticks(0), "", "command", {}).has_value());
-	CHECK_FALSE(runtime.accept(SimTime::from_ticks(0), "actor", "", {}).has_value());
+	CHECK_FALSE(runtime.accept(SimTime::from_ticks(0), "", "command", "j", {}).has_value());
+	CHECK_FALSE(runtime.accept(SimTime::from_ticks(0), "actor", "", "j", {}).has_value());
+	CHECK_FALSE(runtime.accept(SimTime::from_ticks(0), "actor", "command", "", {}).has_value());
 	CHECK(runtime.accepted_command_count() == 0);
 }

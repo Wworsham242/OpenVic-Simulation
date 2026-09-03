@@ -10,10 +10,6 @@
 
 namespace OpenVic {
 
-/// Deterministic accepted-command log and replay cursor.
-///
-/// This layer records only commands that have already passed whatever validation layer
-/// exists above it. FOUNDATION-007 does not define authority/jurisdiction policy yet.
 class OrderedCommandRuntime final {
 private:
 	std::vector<CampaignCommandRecord> accepted_commands;
@@ -32,9 +28,10 @@ public:
 		SimTime submitted_at,
 		std::string actor_id,
 		std::string command_type,
+		std::string jurisdiction_id,
 		std::vector<uint8_t> payload
 	) {
-		if (actor_id.empty() || command_type.empty()) {
+		if (actor_id.empty() || command_type.empty() || jurisdiction_id.empty()) {
 			return std::nullopt;
 		}
 
@@ -44,6 +41,7 @@ public:
 			.submitted_at = submitted_at,
 			.actor_id = std::move(actor_id),
 			.command_type = std::move(command_type),
+			.jurisdiction_id = std::move(jurisdiction_id),
 			.payload = std::move(payload)
 		});
 		return sequence;
@@ -78,7 +76,6 @@ public:
 		return accepted_commands;
 	}
 
-	/// Restore is transactional and requires a canonical contiguous sequence.
 	[[nodiscard]] bool restore(
 		CampaignReplayState replay,
 		std::vector<CampaignCommandRecord> const& command_log
@@ -90,7 +87,8 @@ public:
 
 		for (std::size_t i = 0; i < command_log.size(); ++i) {
 			CampaignCommandRecord const& command = command_log[i];
-			if (command.sequence != i || command.actor_id.empty() || command.command_type.empty()) {
+			if (command.sequence != i || command.actor_id.empty()
+				|| command.command_type.empty() || command.jurisdiction_id.empty()) {
 				return false;
 			}
 		}
