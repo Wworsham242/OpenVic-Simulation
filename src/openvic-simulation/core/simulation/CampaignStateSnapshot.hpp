@@ -10,10 +10,6 @@
 
 namespace OpenVic {
 
-/// Durable state for one deterministic named RNG stream.
-///
-/// FOUNDATION-005 defines storage/composition only. Runtime RNG implementation and
-/// stream-advance semantics are intentionally deferred until the runtime is wired.
 struct CampaignRngStreamState {
 	std::string stream_id;
 	uint64_t state_lo = 0;
@@ -23,10 +19,6 @@ struct CampaignRngStreamState {
 	bool operator==(CampaignRngStreamState const&) const = default;
 };
 
-/// Ordered-command/replay position.
-///
-/// This is deliberately minimal: it gives campaign persistence one authoritative
-/// cursor without prematurely defining the final command envelope or command log format.
 struct CampaignReplayState {
 	uint64_t accepted_command_count = 0;
 	uint64_t replay_cursor = 0;
@@ -34,10 +26,16 @@ struct CampaignReplayState {
 	bool operator==(CampaignReplayState const&) const = default;
 };
 
-/// First generalized durable campaign-state envelope.
-///
-/// It composes already-proven timeline and ECS identity state with durable homes for
-/// deterministic RNG streams and command/replay progress. Domain stores are added later.
+struct CampaignCommandRecord {
+	uint64_t sequence = 0;
+	SimTime submitted_at = SimTime::from_ticks(0);
+	std::string actor_id;
+	std::string command_type;
+	std::vector<uint8_t> payload;
+
+	bool operator==(CampaignCommandRecord const&) const = default;
+};
+
 struct CampaignStateSnapshot {
 	static constexpr uint32_t CURRENT_SCHEMA_VERSION = 1;
 
@@ -45,12 +43,11 @@ struct CampaignStateSnapshot {
 	SimulationTimelineSnapshot timeline;
 	std::vector<CampaignRngStreamState> rng_streams;
 	CampaignReplayState replay;
+	std::vector<CampaignCommandRecord> command_log;
 	ecs::WorldIdentitySnapshot ecs_identity;
 
 	bool operator==(CampaignStateSnapshot const&) const = default;
 
-	/// Canonical state requires RNG streams sorted strictly by stable stream id and
-	/// replay_cursor never to exceed accepted command count.
 	[[nodiscard]] bool is_canonical() const {
 		if (schema_version != CURRENT_SCHEMA_VERSION) {
 			return false;
@@ -58,10 +55,16 @@ struct CampaignStateSnapshot {
 		if (timeline.schema_version != SimulationTimelineSnapshot::CURRENT_SCHEMA_VERSION) {
 			return false;
 		}
-		if (replay.replay_cursor > replay.accepted_command_count) {
+		if (replay.accepted_command_count != command_log.size()
+			|| replay.replay_cursor > replay.accepted_command_count) {
 			return false;
 		}
-
+		for (std::size_t i = 0; i < command_log.size(); ++i) {
+			CampaignCommandRecord const& command = command_log[i];
+			if (command.sequence != i || command.actor_id.empty() || command.command_type.empty()) {
+				return false;
+			}
+		}
 		for (std::size_t i = 1; i < rng_streams.size(); ++i) {
 			if (rng_streams[i - 1].stream_id >= rng_streams[i].stream_id) {
 				return false;
@@ -72,9 +75,6 @@ struct CampaignStateSnapshot {
 				return false;
 			}
 		}
-
-		// ECS identity structural validity is ultimately owned by World::restore_identity.
-		// Here we only guard obvious noncanonical duplicates/out-of-range free indices.
 		std::vector<uint32_t> free_indices = ecs_identity.free_list;
 		std::sort(free_indices.begin(), free_indices.end());
 		if (std::adjacent_find(free_indices.begin(), free_indices.end()) != free_indices.end()) {
@@ -93,11 +93,6 @@ struct CampaignStateSnapshot {
 		return true;
 	}
 
-	/// Stable campaign-envelope checksum.
-	///
-	/// This combines the already-stable timeline checksum with canonical metadata and
-	/// identity records. Domain-state checksums will be composed later as domains enter
-	/// the authoritative campaign package.
 	[[nodiscard]] uint64_t checksum() const {
 		static constexpr uint64_t FNV_OFFSET = 14695981039346656037ull;
 		static constexpr uint64_t FNV_PRIME = 1099511628211ull;
@@ -136,6 +131,18 @@ struct CampaignStateSnapshot {
 		hash = fold_u64(hash, replay.accepted_command_count);
 		hash = fold_u64(hash, replay.replay_cursor);
 
+		hash = fold_u64(hash, static_cast<uint64_t>(command_log.size()));
+		for (CampaignCommandRecord const& command : command_log) {
+			hash = fold_u64(hash, command.sequence);
+			hash = fold_u64(hash, static_cast<uint64_t>(command.submitted_at.ticks()));
+			hash = fold_string(hash, command.actor_id);
+			hash = fold_string(hash, command.command_type);
+			hash = fold_u64(hash, static_cast<uint64_t>(command.payload.size()));
+			for (uint8_t byte : command.payload) {
+				hash = fold_byte(hash, byte);
+			}
+		}
+
 		hash = fold_u64(hash, static_cast<uint64_t>(ecs_identity.slots.size()));
 		for (auto const& slot : ecs_identity.slots) {
 			hash = fold_u64(hash, slot.generation);
@@ -146,7 +153,6 @@ struct CampaignStateSnapshot {
 		for (uint32_t index : ecs_identity.free_list) {
 			hash = fold_u64(hash, index);
 		}
-
 		return hash;
 	}
 };

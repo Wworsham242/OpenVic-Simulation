@@ -54,8 +54,31 @@ namespace {
 				}
 			},
 			.replay = CampaignReplayState {
-				.accepted_command_count = 120,
-				.replay_cursor = 87
+				.accepted_command_count = 3,
+				.replay_cursor = 2
+			},
+			.command_log = {
+				CampaignCommandRecord {
+					.sequence = 0,
+					.submitted_at = SimTime::from_ticks(24),
+					.actor_id = "actor:fixture:a",
+					.command_type = "fixture.command.a",
+					.payload = { 1 }
+				},
+				CampaignCommandRecord {
+					.sequence = 1,
+					.submitted_at = SimTime::from_ticks(24),
+					.actor_id = "actor:fixture:b",
+					.command_type = "fixture.command.b",
+					.payload = { 2 }
+				},
+				CampaignCommandRecord {
+					.sequence = 2,
+					.submitted_at = SimTime::from_ticks(48),
+					.actor_id = "actor:fixture:c",
+					.command_type = "fixture.command.c",
+					.payload = { 3 }
+				}
 			},
 			.ecs_identity = std::move(identity)
 		};
@@ -85,6 +108,10 @@ TEST_CASE("Campaign checksum covers all composed durable dimensions", "[foundati
 	CHECK(changed.checksum() != baseline_checksum);
 
 	changed = baseline;
+	changed.command_log[0].payload.push_back(9);
+	CHECK(changed.checksum() != baseline_checksum);
+
+	changed = baseline;
 	changed.ecs_identity.slots[1].immutable = true;
 	CHECK(changed.checksum() != baseline_checksum);
 
@@ -102,6 +129,18 @@ TEST_CASE("Campaign canonical validation rejects ambiguous durable state", "[fou
 
 	bad = baseline;
 	bad.replay.replay_cursor = bad.replay.accepted_command_count + 1;
+	CHECK_FALSE(bad.is_canonical());
+
+	bad = baseline;
+	bad.replay.accepted_command_count += 1;
+	CHECK_FALSE(bad.is_canonical());
+
+	bad = baseline;
+	bad.command_log[1].sequence = 99;
+	CHECK_FALSE(bad.is_canonical());
+
+	bad = baseline;
+	bad.command_log[0].actor_id.clear();
 	CHECK_FALSE(bad.is_canonical());
 
 	bad = baseline;
