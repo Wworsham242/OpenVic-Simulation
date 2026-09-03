@@ -100,7 +100,9 @@ CountryInstance::CountryInstance(
 		country_instance_deps.stratas,
 		[this](Strata const& strata)->auto {
 			return [this,&strata](DependencyTracker& tracker)->fixed_point_t {
-				return tax_efficiency.get(tracker) * tax_rate_slider_value_by_strata.at(strata).get_value(tracker);
+				return tax_efficiency.get(tracker)
+					* fiscal_collection_capacity.get_realization_factor(tracker)
+					* tax_rate_slider_value_by_strata.at(strata).get_value(tracker);
 			};
 		}
 	},

@@ -9,6 +9,7 @@
 #include "openvic-simulation/core/memory/Vector.hpp"
 #include "openvic-simulation/core/stl/containers/TypedSpan.hpp"
 #include "openvic-simulation/core/thread/SpinMutex.hpp"
+#include "openvic-simulation/country/FiscalCollectionCapacity.hpp"
 #include "openvic-simulation/diplomacy/CountryRelation.hpp"
 #include "openvic-simulation/economy/BuildingLevel.hpp"
 #include "openvic-simulation/economy/BuildingRestrictionCategory.hpp"
@@ -164,6 +165,7 @@ namespace OpenVic {
 		// TODO - total amount of each good produced
 
 		/* Budget */
+		FiscalCollectionCapacity PROPERTY_REF(fiscal_collection_capacity);
 		fixed_point_t cash_stockpile_start_of_tick;
 		ValueHistory<fixed_point_t> PROPERTY(balance_history);
 		OV_STATE_PROPERTY(fixed_point_t, gold_income);
