@@ -6,6 +6,7 @@
 
 #include "openvic-simulation/console/ConsoleInstance.hpp"
 #include "openvic-simulation/core/memory/Vector.hpp"
+#include "openvic-simulation/core/simulation/AuthorityRegistry.hpp"
 #include "openvic-simulation/core/simulation/SimulationTimeline.hpp"
 #include "openvic-simulation/country/CountryInstanceDeps.hpp"
 #include "openvic-simulation/country/CountryInstanceManager.hpp"
@@ -63,6 +64,11 @@ namespace OpenVic {
 		MapInstance PROPERTY_REF(map_instance);
 		SimulationClock PROPERTY_REF(simulation_clock);
 		SimulationTimeline simulation_timeline;
+
+		// FOUNDATION-009: live generalized command-admission state.
+		AuthorityRegistry authority_registry;
+		OrderedCommandRuntime ordered_command_runtime;
+		CommandAdmissionRuntime command_admission_runtime;
 		ConsoleInstance PROPERTY_REF(console_instance);
 
 		bool PROPERTY_CUSTOM_PREFIX(game_instance_setup, is, false);
@@ -107,6 +113,40 @@ namespace OpenVic {
 			return simulation_timeline.current_time();
 		}
 
+		/// Register one generalized actor authority profile.
+		[[nodiscard]] bool register_actor_authority(ActorAuthorityProfile profile) {
+			return authority_registry.register_profile(std::move(profile));
+		}
+
+		/// Submit through generalized authority using authoritative simulation time.
+		///
+		/// FOUNDATION-009 records authorized commands but does not yet execute domain mutation.
+		[[nodiscard]] CommandAdmissionResult submit_authorized_command(
+			std::string actor_id,
+			std::string command_type,
+			std::string jurisdiction_id,
+			std::vector<uint8_t> payload
+		) {
+			return command_admission_runtime.submit(
+				simulation_timeline.current_time(),
+				std::move(actor_id),
+				std::move(command_type),
+				std::move(jurisdiction_id),
+				std::move(payload)
+			);
+		}
+
+		[[nodiscard]] uint64_t get_accepted_command_count() const {
+			return ordered_command_runtime.accepted_command_count();
+		}
+
+		[[nodiscard]] CampaignReplayState capture_command_replay_state() const {
+			return ordered_command_runtime.capture_replay_state();
+		}
+
+		[[nodiscard]] std::vector<CampaignCommandRecord> capture_accepted_command_log() const {
+			return ordered_command_runtime.capture_command_log();
+		}
 		template<typename T, typename... Args>
 		bool queue_game_action(Args&&... args) {
 			return queue_game_action(

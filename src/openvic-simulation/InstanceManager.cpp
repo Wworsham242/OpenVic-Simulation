@@ -140,6 +140,7 @@ InstanceManager::InstanceManager(
 			update_gamestate();
 		}
 	},
+	command_admission_runtime { authority_registry, ordered_command_runtime },
 	console_instance { *this },
 	gamestate_updated { gamestate_updated_callback ? std::move(gamestate_updated_callback) : []() {} } {}
 
