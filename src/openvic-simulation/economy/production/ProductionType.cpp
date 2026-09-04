@@ -183,7 +183,7 @@ bool ProductionTypeManager::add_production_type(
 
 	using enum ProductionType::template_type_t;
 
-	if (template_type == ARTISAN) {
+	if (template_type == ARTISAN || template_type == AGGREGATE) {
 		if (owner_before_move.has_value()) {
 			spdlog::warn_s(
 				"Artisanal production type {} should not have an owner - it is being ignored.", identifier

@@ -952,7 +952,9 @@ bool Dataloader::load_defines(
 	static constexpr std::string_view issues_file = "common/issues.txt";
 	static constexpr std::string_view national_foci_file = "common/national_focus.txt";
 	static constexpr std::string_view national_values_file = "common/nationalvalues.txt";
+	static constexpr std::string_view modern_goods_file = "common/modern_goods.txt";
 	static constexpr std::string_view production_types_file = "common/production_types.txt";
+	static constexpr std::string_view modern_production_types_file = "common/modern_production_types.txt";
 	static constexpr std::string_view live_economy_file = "common/live_economy.txt";
 	static constexpr std::string_view religion_file = "common/religion.txt";
 	static constexpr std::string_view leader_traits_file = "common/traits.txt";
@@ -983,7 +985,20 @@ bool Dataloader::load_defines(
 		spdlog::critical_s("Failed to load defines!");
 		ret = false;
 	}
-	if (!_load_goods(definition_manager)) {
+	    {
+        const fs::path modern_goods_path = lookup_file(modern_goods_file, false);
+        if (!modern_goods_path.empty()) {
+            if (!definition_manager.get_economy_manager().load_modern_goods_catalog_file(
+                parse_defines(modern_goods_path).get_file_node()
+            )) {
+                spdlog::critical_s("Failed to load additive modern goods catalog!");
+                ret = false;
+            } else {
+                SPDLOG_INFO("Loaded additive modern goods catalog.");
+            }
+        }
+    }
+if (!_load_goods(definition_manager)) {
 		spdlog::critical_s("Failed to load goods!");
 		ret = false;
 	}
@@ -1022,6 +1037,22 @@ bool Dataloader::load_defines(
 	)) {
 		spdlog::critical_s("Failed to load production types!");
 		ret = false;
+	}
+	{
+		const fs::path modern_production_path =
+			lookup_file(modern_production_types_file, false);
+		if (!modern_production_path.empty()) {
+			if (!definition_manager.get_economy_manager().load_modern_production_catalog_file(
+				game_rules_manager,
+				definition_manager.get_pop_manager(),
+				parse_defines(modern_production_path).get_file_node()
+			)) {
+				spdlog::critical_s("Failed to load additive modern production catalog!");
+				ret = false;
+			} else {
+				SPDLOG_INFO("Loaded additive modern production catalog.");
+			}
+		}
 	}
 	{
 		const fs::path live_economy_path = lookup_file(live_economy_file, false);

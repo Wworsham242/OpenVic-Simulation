@@ -47,7 +47,7 @@ namespace OpenVic {
 	struct ProductionType : HasIdentifier {
 		friend struct ProductionTypeManager;
 
-		enum struct template_type_t { FACTORY, RGO, ARTISAN };
+		enum struct template_type_t { FACTORY, RGO, ARTISAN, AGGREGATE };
 
 		using bonus_t = std::pair<ConditionScript, fixed_point_t>;
 

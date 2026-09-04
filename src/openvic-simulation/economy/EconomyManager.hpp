@@ -11,6 +11,7 @@
 #include "openvic-simulation/economy/GoodDefinition.hpp"
 #include "openvic-simulation/economy/LiveEconomyScenario.hpp"
 #include "openvic-simulation/economy/production/ProductionType.hpp"
+#include "openvic-simulation/population/PopManager.hpp"
 
 namespace OpenVic {
 	struct EconomyManager {
@@ -165,5 +166,103 @@ namespace OpenVic {
 			}
 
 			return configure_live_economy_scenario(std::move(scenario));
-		}	};
+		}
+        /* LIVE-ECONOMY-005: preload additive modern goods before the
+         * legacy goods loader performs its normal one-time registry lock. */
+        bool load_modern_goods_catalog_file(ast::NodeCPtr root) {
+            using namespace NodeTools;
+
+            return expect_dictionary(
+                [this](std::string_view category_identifier, ast::NodeCPtr category_node) -> bool {
+                    size_t expected_goods = 0;
+                    bool ret = expect_length(assign_variable_callback(expected_goods))(category_node);
+                    ret &= good_definition_manager.add_good_category(category_identifier, expected_goods);
+
+                    GoodCategory const* const category_const =
+                        good_definition_manager.get_good_category_by_identifier(category_identifier);
+                    if (category_const == nullptr) {
+                        return false;
+                    }
+                    GoodCategory& category = const_cast<GoodCategory&>(*category_const);
+
+                    ret &= expect_dictionary(
+                        [this, &category](std::string_view good_identifier, ast::NodeCPtr good_node) -> bool {
+                            colour_t colour = colour_t::null();
+                            fixed_point_t cost = 0;
+
+                            bool good_ret = expect_dictionary_keys(
+                                "color", ONE_EXACTLY, expect_colour(assign_variable_callback(colour)),
+                                "cost", ONE_EXACTLY, expect_fixed_point(assign_variable_callback(cost))
+                            )(good_node);
+
+                            good_ret &= good_definition_manager.add_good_definition(
+                                good_identifier, colour, category, cost,
+                                true, true, false, false
+                            );
+                            return good_ret;
+                        }
+                    )(category_node);
+
+                    return ret;
+                }
+            )(root);
+        }
+
+        /* Add generalized aggregate production recipes after legacy
+         * production types are loaded. AGGREGATE has no Victoria owner/job
+         * actor semantics. */
+        bool load_modern_production_catalog_file(
+            GameRulesManager const& game_rules_manager,
+            PopManager const& pop_manager,
+            ast::NodeCPtr root
+        ) {
+            using namespace NodeTools;
+
+            return expect_dictionary(
+                [this, &game_rules_manager, &pop_manager](
+                    std::string_view process_identifier,
+                    ast::NodeCPtr process_node
+                ) -> bool {
+                    pop_size_t workforce { 1 };
+                    fixed_point_map_t<GoodDefinition const*> input_goods;
+                    GoodDefinition const* output_good = nullptr;
+                    fixed_point_t output_value = 0;
+
+                    bool ret = expect_dictionary_keys(
+                        "workforce", ZERO_OR_ONE,
+                            expect_strong_typedef<pop_size_t>(assign_variable_callback(workforce)),
+                        "input_goods", ONE_EXACTLY,
+                            good_definition_manager.expect_good_definition_decimal_map(
+                                move_variable_callback(input_goods)
+                            ),
+                        "output_good", ONE_EXACTLY,
+                            good_definition_manager.expect_good_definition_identifier(
+                                assign_variable_callback_pointer(output_good)
+                            ),
+                        "value", ONE_EXACTLY,
+                            expect_fixed_point(assign_variable_callback(output_value))
+                    )(process_node);
+
+                    if (!ret) {
+                        return false;
+                    }
+
+                    return production_type_manager.add_production_type(
+                        game_rules_manager,
+                        pop_manager.get_pop_types(),
+                        process_identifier,
+                        std::nullopt,
+                        memory::vector<Job> {},
+                        ProductionType::template_type_t::AGGREGATE,
+                        workforce,
+                        std::move(input_goods),
+                        output_good,
+                        output_value,
+                        memory::vector<ProductionType::bonus_t> {},
+                        fixed_point_map_t<GoodDefinition const*> {},
+                        false, false, false
+                    );
+                }
+            )(root);
+        }	};
 }
