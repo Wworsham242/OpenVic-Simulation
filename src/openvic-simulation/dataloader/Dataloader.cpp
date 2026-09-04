@@ -953,6 +953,7 @@ bool Dataloader::load_defines(
 	static constexpr std::string_view national_foci_file = "common/national_focus.txt";
 	static constexpr std::string_view national_values_file = "common/nationalvalues.txt";
 	static constexpr std::string_view production_types_file = "common/production_types.txt";
+	static constexpr std::string_view live_economy_file = "common/live_economy.txt";
 	static constexpr std::string_view religion_file = "common/religion.txt";
 	static constexpr std::string_view leader_traits_file = "common/traits.txt";
 	static constexpr std::string_view cb_types_file = "common/cb_types.txt";
@@ -1021,6 +1022,21 @@ bool Dataloader::load_defines(
 	)) {
 		spdlog::critical_s("Failed to load production types!");
 		ret = false;
+	}
+	{
+		const fs::path live_economy_path = lookup_file(live_economy_file, false);
+		if (!live_economy_path.empty()) {
+			if (!definition_manager.get_economy_manager().load_live_economy_scenario_file(
+				parse_defines(live_economy_path).get_file_node()
+			)) {
+				spdlog::critical_s("Failed to load optional live economy scenario!");
+				ret = false;
+			} else {
+				SPDLOG_INFO("Loaded optional live economy scenario definition.");
+			}
+		} else {
+			SPDLOG_INFO("No optional live economy scenario definition found.");
+		}
 	}
 	if (!definition_manager.get_economy_manager().load_buildings_file(definition_manager.get_modifier_manager(),
 		parse_defines(lookup_file(buildings_file)).get_file_node()
