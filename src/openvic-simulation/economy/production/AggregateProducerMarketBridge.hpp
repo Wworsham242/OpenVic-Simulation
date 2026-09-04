@@ -67,14 +67,23 @@ public:
 	[[nodiscard]] std::optional<BuyUpToOrder> make_input_buy_order(
 		GoodDefinition const& good,
 		fixed_point_t money_to_spend,
-		std::optional<country_index_t> country_index_optional = std::nullopt
+		std::optional<country_index_t> country_index_optional = std::nullopt,
+		std::optional<fixed_point_t> max_deliverable_quantity = std::nullopt
 	) {
-		const fixed_point_t shortfall = calculate_input_shortfall(good);
-		if(shortfall <= 0 || money_to_spend <= 0){return std::nullopt;}
+		fixed_point_t order_quantity = calculate_input_shortfall(good);
+
+		if (max_deliverable_quantity.has_value()) {
+			order_quantity = std::min(
+				order_quantity,
+				std::max(*max_deliverable_quantity, fixed_point_t::_0)
+			);
+		}
+
+		if(order_quantity <= 0 || money_to_spend <= 0){return std::nullopt;}
 		pending_buys.push_back({this,&good,false});
 		auto& pending = pending_buys.back();
 		return BuyUpToOrder{
-			good.index,country_index_optional,shortfall,money_to_spend,&pending,after_input_buy
+			good.index,country_index_optional,order_quantity,money_to_spend,&pending,after_input_buy
 		};
 	}
 
