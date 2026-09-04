@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <utility>
 
 #include <function2/function2.hpp>
@@ -15,6 +16,7 @@
 #include "openvic-simulation/country/CountryInstanceManager.hpp"
 #include "openvic-simulation/diplomacy/CountryRelation.hpp"
 #include "openvic-simulation/economy/GoodInstance.hpp"
+#include "openvic-simulation/economy/LiveEconomyRuntime.hpp"
 #include "openvic-simulation/economy/production/ArtisanalProducerDeps.hpp"
 #include "openvic-simulation/economy/production/ResourceGatheringOperationDeps.hpp"
 #include "openvic-simulation/economy/trading/MarketInstance.hpp"
@@ -50,6 +52,7 @@ namespace OpenVic {
 		GameRulesManager const& game_rules_manager;
 		GoodInstanceManager PROPERTY_REF(good_instance_manager);
 		MarketInstance PROPERTY_REF(market_instance);
+		std::unique_ptr<LiveEconomyRuntime> live_economy_runtime;
 
 		ArtisanalProducerDeps artisanal_producer_deps;
 		CountryInstanceDeps country_instance_deps;
@@ -118,6 +121,11 @@ namespace OpenVic {
 			return simulation_timeline.current_time();
 		}
 
+		[[nodiscard]] LiveEconomyStatus get_live_economy_status() const {
+			return live_economy_runtime != nullptr
+				? live_economy_runtime->get_status()
+				: LiveEconomyStatus {};
+		}
 		/// Register one generalized actor authority profile.
 		[[nodiscard]] bool register_actor_authority(ActorAuthorityProfile profile) {
 			return authority_registry.register_profile(std::move(profile));
