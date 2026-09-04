@@ -264,45 +264,27 @@ bool InstanceManager::setup() {
 		map_instance.get_province_instances()
 	);
 
-	// LIVE-ECONOMY-001: instantiate a minimal economy inside the actual
-	// InstanceManager runtime using three loaded tradeable, non-money goods.
-	GoodDefinition const* live_goods[3] = { nullptr, nullptr, nullptr };
-	size_t live_good_count = 0;
+	// LIVE-ECONOMY-002: instantiate only from explicit scenario-owned
+	// definitions. The runtime no longer invents goods, processes, nodes,
+	// producer capacities, source inflow, or transport legs.
+	LiveEconomyScenarioDefinition const* const live_scenario =
+		definition_manager.get_economy_manager().get_live_economy_scenario();
 
-	for (
-		GoodDefinition const& good :
-		definition_manager.get_economy_manager()
-			.get_good_definition_manager()
-			.get_good_definitions()
-	) {
-		if (!good.is_tradeable || good.is_money) {
-			continue;
-		}
-
-		live_goods[live_good_count++] = &good;
-		if (live_good_count == 3) {
-			break;
-		}
-	}
-
-	if (live_good_count == 3) {
+	if (live_scenario != nullptr && live_scenario->is_valid()) {
 		live_economy_runtime = std::make_unique<LiveEconomyRuntime>(
 			game_rules_manager,
 			good_instance_manager,
-			*live_goods[0],
-			*live_goods[1],
-			*live_goods[2]
+			*live_scenario
 		);
 
 		SPDLOG_INFO(
-			"LIVE-ECONOMY-001 configured with goods: {}, {}, {}",
-			live_goods[0]->get_identifier(),
-			live_goods[1]->get_identifier(),
-			live_goods[2]->get_identifier()
+			"LIVE-ECONOMY-002 configured from scenario: upstream={}, downstream={}",
+			live_scenario->upstream_process->get_identifier(),
+			live_scenario->downstream_process->get_identifier()
 		);
 	} else {
-		spdlog::warn_s(
-			"LIVE-ECONOMY-001 could not configure: fewer than three tradeable non-money goods."
+		SPDLOG_INFO(
+			"LIVE-ECONOMY-002 has no configured scenario; live aggregate economy remains disabled."
 		);
 	}
 	game_instance_setup = true;
