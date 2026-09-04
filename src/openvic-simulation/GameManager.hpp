@@ -52,6 +52,10 @@ namespace OpenVic {
 			OV_ERR_FAIL_COND_V_MSG(!dataloader.set_roots(base_path, {}), false, "Failed to set Dataloader's base path");
 			return true;
 		};
+		/// Append one application-owned data root after the base game and
+		/// before user-selected mods. Later roots retain normal override
+		/// precedence.
+		bool add_application_data_root(fs::path const& root);
 
 		bool load_mod_descriptors();
 

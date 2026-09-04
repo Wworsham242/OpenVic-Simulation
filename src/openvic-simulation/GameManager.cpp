@@ -58,6 +58,27 @@ GameManager::~GameManager() {
 	}
 }
 
+bool GameManager::add_application_data_root(fs::path const& root) {
+	if (root.empty() || !fs::is_directory(root)) {
+		spdlog::error_s("Invalid application data root: {}", root.string());
+		return false;
+	}
+
+	Dataloader::path_vector_t roots = dataloader.get_roots();
+	if (roots.empty()) {
+		spdlog::error_s("Cannot add application data root before the base path is configured.");
+		return false;
+	}
+
+	for (fs::path const& existing : roots) {
+		if (fs::equivalent(existing, root)) {
+			return true;
+		}
+	}
+
+	roots.emplace_back(root);
+	return dataloader.set_roots(roots, dataloader.get_replace_paths(), false);
+}
 bool GameManager::load_mod_descriptors() {
 	if (mod_descriptors_loaded) {
 		spdlog::error_s("Cannot load mod descriptors - already loaded!");
