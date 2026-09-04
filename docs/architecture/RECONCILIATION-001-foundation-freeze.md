@@ -2,6 +2,21 @@
 
 Status: foundation surgery is frozen after FOUNDATION-010, subject only to demonstrated integration defects.
 
+## Native-engine convergence authority
+
+OpenVic-Simulation is being developed toward the single authoritative runtime of the project's own
+setting-general grand-strategy engine. The generalized authority accumulated in `InstanceManager`
+is part of that convergence, not a second runtime beside WargameEngine. WargameEngine/Rust remains
+a donor, reference, benchmark, and temporary migration source; its operational `ScenarioHost` path
+is transitional.
+
+Inherited mechanisms are dispositioned as `KEEP`, `GENERALIZE`, `REWRITE`, `REMOVE`, or
+`COMPATIBILITY-ONLY`; useful OpenVic mechanisms are not rewritten merely because of their origin.
+Numeric legacy country identities, Victoria-shaped definitions, and Victoria-backed bootstrap
+paths are compatibility mechanisms during migration, not the final engine ontology or startup
+architecture. The finished runtime must load native moddable rulesets/content without requiring
+Victoria II; Victoria III is reference material only.
+
 ## 1. What is now real
 
 The production `InstanceManager` owns:
