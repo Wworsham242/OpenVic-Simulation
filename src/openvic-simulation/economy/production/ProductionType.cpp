@@ -183,17 +183,18 @@ bool ProductionTypeManager::add_production_type(
 
 	using enum ProductionType::template_type_t;
 
-	if (template_type == ARTISAN || template_type == AGGREGATE) {
+	if (template_type == ARTISAN || template_type == PROCESS) {
 		if (owner_before_move.has_value()) {
 			spdlog::warn_s(
-				"Artisanal production type {} should not have an owner - it is being ignored.", identifier
+				"Production type {} does not use Victoria owner semantics - owner is being ignored.",
+				identifier
 			);
 			owner_before_move.reset();
 		}
 
 		if (!jobs.empty()) {
 			spdlog::warn_s(
-				"Artisanal production type {} should not have employees - {} are being ignored.",
+				"Production type {} does not use Victoria employee semantics - {} jobs are being ignored.",
 				identifier, jobs.size()
 			);
 			jobs.clear();

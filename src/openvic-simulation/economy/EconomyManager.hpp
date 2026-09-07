@@ -208,9 +208,10 @@ namespace OpenVic {
             )(root);
         }
 
-        /* Add generalized aggregate production recipes after legacy
-         * production types are loaded. AGGREGATE has no Victoria owner/job
-         * actor semantics. */
+        /* Add setting-general production processes after legacy production
+         * types are loaded. PROCESS reuses OpenVic's ProductionType inputs,
+         * outputs, workforce scale and maintenance requirements without
+         * Victoria owner/job actor semantics. */
         bool load_modern_production_catalog_file(
             GameRulesManager const& game_rules_manager,
             PopManager const& pop_manager,
@@ -225,6 +226,7 @@ namespace OpenVic {
                 ) -> bool {
                     pop_size_t workforce { 1 };
                     fixed_point_map_t<GoodDefinition const*> input_goods;
+                    fixed_point_map_t<GoodDefinition const*> maintenance_requirements;
                     GoodDefinition const* output_good = nullptr;
                     fixed_point_t output_value = 0;
 
@@ -234,6 +236,10 @@ namespace OpenVic {
                         "input_goods", ONE_EXACTLY,
                             good_definition_manager.expect_good_definition_decimal_map(
                                 move_variable_callback(input_goods)
+                            ),
+                        "maintenance_requirements", ZERO_OR_ONE,
+                            good_definition_manager.expect_good_definition_decimal_map(
+                                move_variable_callback(maintenance_requirements)
                             ),
                         "output_good", ONE_EXACTLY,
                             good_definition_manager.expect_good_definition_identifier(
@@ -253,13 +259,13 @@ namespace OpenVic {
                         process_identifier,
                         std::nullopt,
                         memory::vector<Job> {},
-                        ProductionType::template_type_t::AGGREGATE,
+                        ProductionType::template_type_t::PROCESS,
                         workforce,
                         std::move(input_goods),
                         output_good,
                         output_value,
                         memory::vector<ProductionType::bonus_t> {},
-                        fixed_point_map_t<GoodDefinition const*> {},
+                        std::move(maintenance_requirements),
                         false, false, false
                     );
                 }

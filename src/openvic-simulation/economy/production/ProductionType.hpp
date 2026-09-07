@@ -47,7 +47,14 @@ namespace OpenVic {
 	struct ProductionType : HasIdentifier {
 		friend struct ProductionTypeManager;
 
-		enum struct template_type_t { FACTORY, RGO, ARTISAN, AGGREGATE };
+		enum struct template_type_t {
+			FACTORY,
+			RGO,
+			ARTISAN,
+			PROCESS,
+			// Compatibility alias for convergence-era content.
+			AGGREGATE = PROCESS
+		};
 
 		using bonus_t = std::pair<ConditionScript, fixed_point_t>;
 
@@ -96,6 +103,10 @@ namespace OpenVic {
 		bool get_is_mine_for_non_tech() const;
 		bool is_valid_for_artisan_in(ProvinceInstance& province) const;
 		bool is_valid_for_factory_in(State& state) const;
+
+		[[nodiscard]] constexpr bool is_setting_general_process() const {
+			return template_type == template_type_t::PROCESS;
+		}
 		ProductionType(ProductionType&&) = default;
 	};
 

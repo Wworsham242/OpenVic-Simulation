@@ -934,3 +934,40 @@ TEST_CASE(
 
 	REQUIRE(manager.end_game_session());
 }
+TEST_CASE(
+	"Native catalog uses setting-general OpenVic production processes",
+	"[convergence][native-ruleset][production-process]"
+) {
+	GameManager manager {
+		[]() {},
+		[]() -> uint64_t { return 0; },
+		[]() -> uint64_t { return 0; }
+	};
+
+	std::filesystem::path const data_root =
+		std::filesystem::path { __FILE__ }.parent_path().parent_path()
+		/ "data" / "native-ruleset-bootstrap";
+
+	REQUIRE(manager.load_native_economy_bootstrap(data_root));
+
+	EconomyManager const& economy =
+		manager.get_definition_manager().get_economy_manager();
+
+	ProductionType const* const steel_process =
+		economy.get_production_type_manager()
+			.get_production_type_by_identifier("native_ore_to_steel");
+
+	REQUIRE(steel_process != nullptr);
+	CHECK(
+		steel_process->template_type
+		== ProductionType::template_type_t::PROCESS
+	);
+	CHECK(steel_process->is_setting_general_process());
+	CHECK(steel_process->input_goods.size() == 1);
+	CHECK(steel_process->maintenance_requirements.size() == 1);
+	CHECK(
+		steel_process->output_good.get_identifier()
+		== "native_primary_steel"
+	);
+	CHECK(steel_process->base_output_quantity == fixed_point_t(1));
+}

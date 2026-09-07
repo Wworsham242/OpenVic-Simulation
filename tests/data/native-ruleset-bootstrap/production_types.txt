@@ -3,6 +3,9 @@ native_ore_to_steel = {
 	input_goods = {
 		native_iron_ore = 1
 	}
+	maintenance_requirements = {
+		native_industrial_machinery = 0.1
+	}
 	output_good = native_primary_steel
 	value = 1
 }
