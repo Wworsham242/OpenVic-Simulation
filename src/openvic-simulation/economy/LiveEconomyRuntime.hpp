@@ -11,6 +11,7 @@
 #include "openvic-simulation/economy/LiveEconomyScenario.hpp"
 #include "openvic-simulation/economy/production/AggregateProducer.hpp"
 #include "openvic-simulation/economy/production/AggregateProducerMarketBridge.hpp"
+#include "openvic-simulation/economy/production/WorkforceAllocation.hpp"
 #include "openvic-simulation/economy/trading/LogisticsGraph.hpp"
 #include "openvic-simulation/economy/trading/MarketNodeAccess.hpp"
 #include "openvic-simulation/economy/trading/SharedTransportCapacity.hpp"
@@ -451,7 +452,13 @@ public:
 		return logistics_graph.set_edge_open(edge_id, open);
 	}
 
-	void pre_market_daily_tick() {
+	// Supply the current local POP pool after the day's employment reset.
+	// An omitted pool preserves the existing externally configured workforce;
+	// an explicitly empty pool means no workers. No POP references are retained.
+	void pre_market_daily_tick(std::optional<std::span<Pop>> upstream_pops = std::nullopt) {
+		if (upstream_pops.has_value()) {
+			(void)allocate_producer_workforce(upstream, *upstream_pops);
+		}
 		ResourceFlowResult const source_flow =
 			source_network.fulfill(
 				scenario.source_inflow_per_daily_tick,

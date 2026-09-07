@@ -9,6 +9,21 @@
 #include "openvic-simulation/economy/production/ProductionType.hpp"
 #include "openvic-simulation/misc/GameRulesManager.hpp"
 #include "openvic-simulation/types/Colour.hpp"
+#include "openvic-simulation/defines/Define.hpp"
+#include "openvic-simulation/economy/production/ArtisanalProducerDeps.hpp"
+#include "openvic-simulation/economy/production/ResourceGatheringOperationDeps.hpp"
+#include "openvic-simulation/economy/trading/MarketInstance.hpp"
+#include "openvic-simulation/map/ProvinceDefinition.hpp"
+#include "openvic-simulation/map/ProvinceInstance.hpp"
+#include "openvic-simulation/map/ProvinceInstanceDeps.hpp"
+#include "openvic-simulation/modifier/ModifierManager.hpp"
+#include "openvic-simulation/population/Culture.hpp"
+#include "openvic-simulation/population/Pop.hpp"
+#include "openvic-simulation/population/PopDeps.hpp"
+#include "openvic-simulation/population/PopType.hpp"
+#include "openvic-simulation/population/PopsAggregateDeps.hpp"
+#include "openvic-simulation/population/Religion.hpp"
+#include "openvic-simulation/utility/ThreadPool.hpp"
 
 #include <snitch/snitch_macros_check.hpp>
 #include <snitch/snitch_macros_test_case.hpp>
@@ -28,7 +43,10 @@ namespace {
 		std::optional<ProductionType> upstream_process;
 		std::optional<ProductionType> downstream_process;
 
-		LiveEconomyFixture() {
+		LiveEconomyFixture(
+			memory::vector<Job> jobs = {}, pop_size_t workforce = pop_size_t { 0 },
+			ProductionType::template_type_t type = ProductionType::template_type_t::FACTORY
+		) {
 			REQUIRE(definitions.add_good_category("live", 3));
 			category = definitions.get_good_category_by_identifier("live");
 			REQUIRE(category != nullptr);
@@ -61,9 +79,9 @@ namespace {
 				rules,
 				"live_upstream",
 				std::nullopt,
-				memory::vector<Job> {},
-				ProductionType::template_type_t::FACTORY,
-				pop_size_t { 0 },
+				std::move(jobs),
+				type,
+				workforce,
 				std::move(upstream_inputs),
 				*intermediate,
 				fixed_point_t::_1,
@@ -223,4 +241,133 @@ TEST_CASE(
 	CHECK(status.intermediate_supply_yesterday == fixed_point_t(4));
 	CHECK(status.intermediate_demand_yesterday >= fixed_point_t(4));
 	CHECK(status.intermediate_quantity_traded_yesterday == fixed_point_t(4));
+}
+
+namespace {
+	// Real POP dependencies, with empty political/needs definitions: none are
+	// consulted by employment allocation. No mock employment counters.
+	struct WorkforcePopFixture {
+		Date date;
+		ThreadPool threads { date };
+		DefineManager defines;
+		ModifierManager modifier_manager;
+		BuildingTypeManager buildings;
+		PopsAggregateDeps aggregates { {}, {}, pop_type_index_t { 2 }, {}, strata_index_t { 1 } };
+		MarketInstance market;
+		ResourceGatheringOperationDeps rgo_deps {
+			market, modifier_manager.get_modifier_effect_cache(), pop_type_index_t { 2 }
+		};
+		ArtisanalProducerDeps artisan_deps {
+			defines.get_economy_defines(), {}, modifier_manager.get_modifier_effect_cache()
+		};
+		PopDeps pop_deps { artisan_deps, market, aggregates };
+		ProvinceDefinition definition { "workplace", colour_t { 0x12, 0x34, 0x56 }, province_index_t { 0 } };
+		ProvinceInstance province;
+		Strata strata { "workers", strata_index_t { 0 } };
+		GraphicalCultureType graphics { "test", graphical_culture_index_t { 0 } };
+		CultureGroup group { "test", "test", graphics, false, nullptr };
+		Culture culture { "test", colour_t { 0x12, 0x34, 0x56 }, group, {}, {}, 0, nullptr };
+		ReligionGroup religion_group { "test" };
+		Religion religion { "test", colour_t { 0x12, 0x34, 0x56 }, religion_group, 1, false };
+		PopType eligible = make_type("eligible", pop_type_index_t { 0 });
+		PopType ineligible = make_type("ineligible", pop_type_index_t { 1 });
+
+		PopType make_type(std::string_view name, pop_type_index_t index) {
+			return PopType {
+				name, colour_t { 0x12, 0x34, 0x56 }, index, strata, pop_sprite_t {}, {}, {}, {},
+				PopType::income_type_t::NO_INCOME_TYPE,
+				PopType::income_type_t::NO_INCOME_TYPE,
+				PopType::income_type_t::NO_INCOME_TYPE,
+				{}, pop_size_t { 1000 }, pop_size_t { 1000 },
+				false, false, false, false, false, false,
+				false, false, false, false, false, true,
+				0, 0, 0, 0, nullptr, {}, {},
+				PopType::poptype_weight_map_t { create_empty },
+				PopType::ideology_weight_map_t { create_empty }, {}
+			};
+		}
+
+		WorkforcePopFixture(GameRulesManager const& rules, GoodInstanceManager& goods)
+			: market { threads, defines.get_country_defines(), goods },
+			province { definition, ProvinceInstanceDeps { buildings, rules, aggregates, rgo_deps, {} } } {}
+
+		Pop make_pop(PopType const& type, int size, size_t id) {
+			struct InitialPop : PopBase {
+				InitialPop(PopType const& type, Culture const& culture, Religion const& religion, int size)
+					: PopBase { type, culture, religion, pop_size_t { size }, 0, 0, nullptr } {}
+			};
+			return Pop { province, InitialPop { type, culture, religion, size },
+				pop_deps, pop_id_in_province_t { id } };
+		}
+	};
+
+	memory::vector<Job> workforce_jobs() {
+		// Duplicate eligibility must never allocate the same POP twice.
+		return {
+			Job { pop_type_index_t { 0 }, Job::effect_t::THROUGHPUT, 1, 1 },
+			Job { pop_type_index_t { 0 }, Job::effect_t::OUTPUT, 1, 1 }
+		};
+	}
+}
+
+TEST_CASE("Native POP allocation propagates labor availability through the live market",
+	"[economy][live-runtime][native-workforce]") {
+	for (int const already_employed : { 0, 20 }) {
+		LiveEconomyFixture fixture {
+			workforce_jobs(), pop_size_t { 10 }, ProductionType::template_type_t::PROCESS
+		};
+		GoodInstanceManager goods { fixture.definitions, fixture.rules };
+		WorkforcePopFixture population { fixture.rules, goods };
+		std::array pops {
+			population.make_pop(population.ineligible, 100, 1),
+			population.make_pop(population.eligible, 40, 2)
+		};
+		if (already_employed > 0) {
+			pops[1].hire(pop_size_t { already_employed });
+		}
+		int const available = 40 - already_employed;
+		REQUIRE(pops[1].get_unemployed() == pop_size_t { available });
+		auto scenario = fixture.make_scenario();
+		LiveEconomyRuntime runtime { fixture.rules, goods, scenario };
+		runtime.pre_market_daily_tick(std::span<Pop> { pops });
+		CHECK(pops[1].get_unemployed() == pop_size_t { 0 });
+		CHECK(pops[0].get_unemployed() == pop_size_t { 100 });
+		auto& market = goods.get_good_instance_by_definition(*fixture.intermediate);
+		execute_intermediate_market(market);
+		runtime.post_market_daily_tick();
+		auto status = runtime.get_status();
+		CHECK(status.upstream_output == fixed_point_t { available / 10 });
+		CHECK(status.intermediate_supply_yesterday == fixed_point_t { available / 10 });
+		CHECK(status.intermediate_quantity_traded_yesterday == fixed_point_t { available / 10 });
+		CHECK(status.downstream_output == fixed_point_t { available / 20 });
+		CHECK(status.downstream_input_limited);
+		CHECK(status.intermediate_upstream_inventory == fixed_point_t::_0);
+		CHECK(status.intermediate_downstream_inventory == fixed_point_t::_0);
+	}
+}
+
+TEST_CASE("Native workforce allocation caps hires and respects existing employment",
+	"[economy][native-workforce]") {
+	LiveEconomyFixture fixture {
+		workforce_jobs(), pop_size_t { 10 }, ProductionType::template_type_t::PROCESS
+	};
+	GoodInstanceManager goods { fixture.definitions, fixture.rules };
+	WorkforcePopFixture population { fixture.rules, goods };
+	std::array pops {
+		population.make_pop(population.eligible, 15, 1),
+		population.make_pop(population.eligible, 50, 2)
+	};
+	AggregateProducer first { "first", *fixture.upstream_process, 4, 1 };
+	CHECK(allocate_producer_workforce(first, pops) == fixed_point_t { 40 });
+	CHECK(first.get_available_workforce() == fixed_point_t { 40 });
+	CHECK(pops[0].get_unemployed() == pop_size_t { 0 });
+	CHECK(pops[1].get_unemployed() == pop_size_t { 25 });
+	AggregateProducer second { "second", *fixture.upstream_process, 4, 1 };
+	CHECK(allocate_producer_workforce(second, pops) == fixed_point_t { 25 });
+	CHECK(pops[1].get_unemployed() == pop_size_t { 0 });
+	AggregateProducer third { "third", *fixture.upstream_process, 4, 1 };
+	CHECK(allocate_producer_workforce(third, pops) == fixed_point_t::_0);
+	CHECK(third.calculate_desired_output() == fixed_point_t::_0);
+	CHECK(allocate_producer_workforce(first, {}) == fixed_point_t::_0);
+	CHECK(first.calculate_desired_output() == fixed_point_t::_0);
 }
