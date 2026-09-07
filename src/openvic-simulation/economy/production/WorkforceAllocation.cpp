@@ -4,6 +4,7 @@
 #include <ranges>
 
 #include "openvic-simulation/economy/production/AggregateProducer.hpp"
+#include "openvic-simulation/economy/production/ResourceGatheringOperation.hpp"
 #include "openvic-simulation/population/Pop.hpp"
 #include "openvic-simulation/population/PopType.hpp"
 
@@ -165,4 +166,94 @@ return allocate_competing_employers_impl(
 std::move(requests),
 std::get<WorkforceColonyView>(pool).pops
 );
+}
+namespace {
+
+bool rgo_accepts_worker_adapter(void* employer, Pop const& pop) {
+return static_cast<ResourceGatheringOperation*>(employer)->accepts_worker(pop);
+}
+
+pop_size_t rgo_assign_worker_adapter(
+void* employer,
+Pop& pop,
+pop_size_t requested
+) {
+return static_cast<ResourceGatheringOperation*>(employer)->assign_worker(
+pop,
+requested
+);
+}
+
+bool producer_accepts_worker_adapter(void* employer, Pop const& pop) {
+auto const& producer = *static_cast<AggregateProducer*>(employer);
+auto const& process = producer.get_production_type();
+
+return std::ranges::any_of(
+process.get_jobs(),
+[&pop](Job const& job) {
+return job.pop_type_index == pop.get_type().index;
+}
+);
+}
+
+pop_size_t producer_assign_worker_adapter(
+void* employer,
+Pop& pop,
+pop_size_t requested
+) {
+auto& producer = *static_cast<AggregateProducer*>(employer);
+
+pop_size_t const available = pop.get_unemployed();
+pop_size_t const actual = std::min(requested, available);
+
+if (actual <= 0) {
+return pop_size_t { 0 };
+}
+
+pop.hire(actual);
+
+producer.set_available_workforce(
+producer.get_available_workforce()
++ fixed_point_t { type_safe::get(actual) }
+);
+
+return actual;
+}
+
+}
+
+WorkforceEmployerRequest OpenVic::make_rgo_workforce_request(
+ResourceGatheringOperation& rgo,
+std::string_view employer_id,
+uint8_t priority
+) {
+return WorkforceEmployerRequest {
+.employer_id = employer_id,
+.priority = priority,
+.requested = rgo.get_remaining_workforce_demand(),
+.employer = &rgo,
+.accepts = &rgo_accepts_worker_adapter,
+.assign = &rgo_assign_worker_adapter
+};
+}
+
+WorkforceEmployerRequest OpenVic::make_producer_workforce_request(
+AggregateProducer& producer,
+std::string_view employer_id,
+uint8_t priority
+) {
+producer.set_available_workforce(fixed_point_t::_0);
+
+auto const& process = producer.get_production_type();
+
+return WorkforceEmployerRequest {
+.employer_id = employer_id,
+.priority = priority,
+.requested =
+producer.get_capacity()
+* fixed_point_t { type_safe::get(process.base_workforce_size) },
+.employer = &producer,
+.accepts = &producer_accepts_worker_adapter,
+.assign = &producer_assign_worker_adapter
+};
 }

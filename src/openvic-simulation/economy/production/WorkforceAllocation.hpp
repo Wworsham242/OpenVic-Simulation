@@ -13,6 +13,7 @@
 namespace OpenVic {
 
 class AggregateProducer;
+struct ResourceGatheringOperation;
 struct Pop;
 
 // Non-owning adapters over authoritative storage, never another POP container.
@@ -67,4 +68,20 @@ bool operator==(WorkforceEmployerAllocation const&) const = default;
 [[nodiscard]] std::vector<WorkforceEmployerAllocation> allocate_competing_employers(
 std::vector<WorkforceEmployerRequest> requests,
 WorkforcePool const& pool
+);
+/// Adapt an already-prepared RGO to the generic allocation authority.
+/// RGO-owned assignment preserves its Employee/payroll caches.
+[[nodiscard]] WorkforceEmployerRequest make_rgo_workforce_request(
+ResourceGatheringOperation& rgo,
+std::string_view employer_id,
+uint8_t priority
+);
+
+/// Adapt an AggregateProducer to the same allocation authority.
+/// Creating the request resets this cycle's producer workforce to zero;
+/// assignments then rebuild it exclusively from authoritative Pop::hire().
+[[nodiscard]] WorkforceEmployerRequest make_producer_workforce_request(
+AggregateProducer& producer,
+std::string_view employer_id,
+uint8_t priority
 );}
