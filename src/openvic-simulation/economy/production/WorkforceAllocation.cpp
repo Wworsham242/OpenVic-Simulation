@@ -8,11 +8,16 @@
 
 using namespace OpenVic;
 
-fixed_point_t OpenVic::allocate_producer_workforce(AggregateProducer& producer, std::span<Pop> pops) {
+fixed_point_t OpenVic::allocate_producer_workforce(
+	AggregateProducer& producer, std::span<Pop> pops, WorkforceAllocationResult* result
+) {
 	ProductionType const& process = producer.get_production_type();
 	fixed_point_t remaining = producer.get_capacity()
 		* fixed_point_t { type_safe::get(process.base_workforce_size) };
 	fixed_point_t allocated = 0;
+	if (result != nullptr) {
+		*result = WorkforceAllocationResult { .requested = remaining };
+	}
 
 	for (Pop& pop : pops) {
 		if (remaining < fixed_point_t::_1) {
@@ -35,5 +40,8 @@ fixed_point_t OpenVic::allocate_producer_workforce(AggregateProducer& producer, 
 		remaining -= hired;
 	}
 	producer.set_available_workforce(allocated);
+	if (result != nullptr) {
+		result->allocated = allocated;
+	}
 	return allocated;
 }

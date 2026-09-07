@@ -47,6 +47,10 @@ TEST_CASE(
 	CHECK(first.delivered == fixed_point_t(4));
 	CHECK(first.buffer_draw == fixed_point_t(2));
 	CHECK(first.unmet == fixed_point_t::_0);
+	CHECK(first.requested == fixed_point_t(4));
+	CHECK(first.physical_supply == fixed_point_t(2));
+	CHECK(first.source_availability_limited);
+	CHECK_FALSE(first.source_access_limited);
 	CHECK(network.buffer_inventory() == fixed_point_t(2));
 
 	ResourceFlowResult second = network.fulfill(fixed_point_t(4));

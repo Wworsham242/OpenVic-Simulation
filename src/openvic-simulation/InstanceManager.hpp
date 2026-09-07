@@ -127,6 +127,11 @@ namespace OpenVic {
 				: LiveEconomyStatus {};
 		}
 
+		[[nodiscard]] std::optional<LiveEconomyCycleProvenance> get_live_economy_provenance() const {
+			return live_economy_runtime != nullptr
+				? live_economy_runtime->get_latest_provenance() : std::nullopt;
+		}
+
 		/// Apply an externally computed resource-domain availability result to
 		/// the live economy source boundary. The economy does not infer the
 		/// cause; it consumes the resulting accessible physical flow.

@@ -19,6 +19,11 @@ struct DeliverableSupply final {
 	fixed_point_t accessible_fraction = fixed_point_t::_1;
 	fixed_point_t delivery_capacity = fixed_point_t::usable_max;
 	bool access_allowed = true;
+	bool operator==(DeliverableSupply const&) const = default;
+
+	[[nodiscard]] bool is_delivery_limited() const {
+		return calculate_deliverable_quantity() < physical_supply;
+	}
 
 	[[nodiscard]] fixed_point_t calculate_deliverable_quantity() const {
 		if (!access_allowed || physical_supply <= 0 || accessible_fraction <= 0 || delivery_capacity <= 0) {

@@ -148,3 +148,23 @@ TEST_CASE("Aggregate bridge rejects meaningless orders","[economy][aggregate-mar
 	producer.set_inventory(oil,fixed_point_t(8));
 	CHECK_FALSE(bridge.make_input_buy_order(oil,fixed_point_t(100)).has_value());
 }
+TEST_CASE("Aggregate bridge retains its own requested and completed transaction quantities",
+	"[economy][aggregate-market][provenance]") {
+	auto process = make_process();
+	AggregateProducer producer { "buyer", process, 4, 1 };
+	AggregateProducerMarketBridge bridge { producer };
+	GoodMarket market { rules, oil };
+	auto order = bridge.make_input_buy_order(oil, 100);
+	REQUIRE(order.has_value());
+	market.add_buy_up_to_order(std::move(*order));
+	execute_market(market); // No seller can fill this order.
+	bridge.clear_completed_orders();
+	auto result = bridge.get_cycle_result();
+	CHECK(result.input_requested == fixed_point_t { 8 });
+	CHECK(result.input_ordered == fixed_point_t { 8 });
+	CHECK(result.input_bought == fixed_point_t::_0);
+	CHECK(result.transaction_limited());
+	CHECK(result.money_spent == fixed_point_t::_0);
+	bridge.reset_cycle_result();
+	CHECK(bridge.get_cycle_result() == AggregateMarketCycleResult {});
+}

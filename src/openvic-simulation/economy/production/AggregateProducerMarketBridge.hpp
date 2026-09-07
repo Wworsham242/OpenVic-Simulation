@@ -12,6 +12,23 @@
 
 namespace OpenVic {
 
+// Quantities for this bridge only, not totals from unrelated market actors.
+// Reset between cycles after their callbacks complete; bounded observation.
+struct AggregateMarketCycleResult final {
+	fixed_point_t input_requested = 0; // Shortfall before the delivery cap.
+	fixed_point_t input_ordered = 0;
+	fixed_point_t output_offered = 0;
+	fixed_point_t input_bought = 0;
+	fixed_point_t output_sold = 0;
+	fixed_point_t money_spent = 0;
+	fixed_point_t money_received = 0;
+	bool operator==(AggregateMarketCycleResult const&) const = default;
+
+	[[nodiscard]] bool transaction_limited() const {
+		return input_bought < input_ordered;
+	}
+};
+
 class AggregateProducerMarketBridge final {
 private:
 	struct pending_buy_t {
@@ -31,12 +48,15 @@ private:
 	fixed_point_t money_spent_on_inputs = 0;
 	fixed_point_t money_spent_on_imports = 0;
 	fixed_point_t money_received_from_sales = 0;
+	AggregateMarketCycleResult cycle_result;
 
 	static void after_input_buy(void* actor, BuyResult const& result) {
 		auto& pending = *static_cast<pending_buy_t*>(actor);
 		pending.bridge->producer.add_inventory(*pending.good, result.quantity_bought);
 		pending.bridge->money_spent_on_inputs += result.money_spent_total;
 		pending.bridge->money_spent_on_imports += result.money_spent_on_imports;
+		pending.bridge->cycle_result.input_bought += result.quantity_bought;
+		pending.bridge->cycle_result.money_spent += result.money_spent_total;
 		pending.completed = true;
 	}
 
@@ -44,6 +64,8 @@ private:
 		auto& pending = *static_cast<pending_sell_t*>(actor);
 		pending.bridge->producer.add_inventory(*pending.good, -result.quantity_sold);
 		pending.bridge->money_received_from_sales += result.money_gained;
+		pending.bridge->cycle_result.output_sold += result.quantity_sold;
+		pending.bridge->cycle_result.money_received += result.money_gained;
 		pending.completed = true;
 	}
 
@@ -56,6 +78,9 @@ private:
 
 public:
 	explicit AggregateProducerMarketBridge(AggregateProducer& new_producer) : producer{new_producer} {}
+
+	void reset_cycle_result() { cycle_result = {}; }
+	[[nodiscard]] AggregateMarketCycleResult get_cycle_result() const { return cycle_result; }
 
 	[[nodiscard]] fixed_point_t calculate_input_shortfall(GoodDefinition const& good) const {
 		auto const input_per_output = get_input_per_output(good);
@@ -71,6 +96,7 @@ public:
 		std::optional<fixed_point_t> max_deliverable_quantity = std::nullopt
 	) {
 		fixed_point_t order_quantity = calculate_input_shortfall(good);
+		cycle_result.input_requested += order_quantity;
 
 		if (max_deliverable_quantity.has_value()) {
 			order_quantity = std::min(
@@ -80,6 +106,7 @@ public:
 		}
 
 		if(order_quantity <= 0 || money_to_spend <= 0){return std::nullopt;}
+		cycle_result.input_ordered += order_quantity;
 		pending_buys.push_back({this,&good,false});
 		auto& pending = pending_buys.back();
 		return BuyUpToOrder{
@@ -97,6 +124,7 @@ public:
 			quantity = std::min(quantity,std::max(*max_quantity,fixed_point_t::_0));
 		}
 		if(quantity <= 0){return std::nullopt;}
+		cycle_result.output_offered += quantity;
 		pending_sells.push_back({this,&output_good,false});
 		auto& pending = pending_sells.back();
 		return MarketSellOrder{

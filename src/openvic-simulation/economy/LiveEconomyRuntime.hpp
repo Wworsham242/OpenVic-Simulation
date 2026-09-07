@@ -10,6 +10,7 @@
 #include "openvic-simulation/economy/BuildingType.hpp"
 #include "openvic-simulation/economy/GoodInstance.hpp"
 #include "openvic-simulation/economy/LiveEconomyScenario.hpp"
+#include "openvic-simulation/economy/LiveEconomyProvenance.hpp"
 #include "openvic-simulation/economy/production/AggregateProducer.hpp"
 #include "openvic-simulation/economy/production/AggregateProducerMarketBridge.hpp"
 #include "openvic-simulation/economy/production/WorkforceAllocation.hpp"
@@ -104,6 +105,7 @@ struct LiveEconomyStatus final {
 	fixed_point_t intermediate_supply_yesterday = 0;
 	fixed_point_t intermediate_demand_yesterday = 0;
 	fixed_point_t intermediate_quantity_traded_yesterday = 0;
+	bool operator==(LiveEconomyStatus const&) const = default;
 };
 
 class LiveEconomyRuntime final {
@@ -132,6 +134,9 @@ private:
 	TransportCorridor corridor;
 
 	LiveEconomyStatus status {};
+	bool record_provenance;
+	std::optional<LiveEconomyCycleProvenance> pending_provenance;
+	std::optional<LiveEconomyCycleProvenance> completed_provenance;
 
 	[[nodiscard]] std::vector<ResourceSourceAccess> build_resource_source_access() const {
 		std::vector<ResourceSourceAccess> access;
@@ -262,7 +267,8 @@ public:
 	LiveEconomyRuntime(
 		GameRulesManager const& new_game_rules_manager,
 		GoodInstanceManager& new_good_instance_manager,
-		LiveEconomyScenarioDefinition const& new_scenario
+		LiveEconomyScenarioDefinition const& new_scenario,
+		bool new_record_provenance = true
 	) : game_rules_manager { new_game_rules_manager },
 		good_instance_manager { new_good_instance_manager },
 		scenario { new_scenario },
@@ -297,7 +303,7 @@ public:
 		corridor {
 			new_scenario.source_node,
 			new_scenario.destination_node
-		} {
+		}, record_provenance { new_record_provenance } {
 
 		for (TransportLeg const& leg : new_scenario.corridor_legs) {
 			corridor.add_leg(leg);
@@ -471,6 +477,9 @@ public:
 			due.has_value() && *due <= current;
 			due = DAILY_CADENCE.next_after(*due)) {
 			pre_market_daily_tick(prepare_workforce(*due));
+			if (pending_provenance) {
+				pending_provenance->due_time = *due;
+			}
 			clear_market();
 			post_market_daily_tick();
 		}
@@ -480,8 +489,21 @@ public:
 	// An omitted pool preserves the existing externally configured workforce;
 	// an explicitly empty pool means no workers. No POP references are retained.
 	void pre_market_daily_tick(std::optional<std::span<Pop>> upstream_pops = std::nullopt) {
+		pending_provenance.reset();
+		if (record_provenance) {
+			pending_provenance.emplace();
+			pending_provenance->upstream_process_id = upstream.get_production_type().get_identifier();
+			pending_provenance->downstream_process_id = downstream.get_production_type().get_identifier();
+			pending_provenance->intermediate_good_id = intermediate_good.get_identifier();
+		}
+		upstream_bridge.reset_cycle_result();
+		downstream_bridge.reset_cycle_result();
 		if (upstream_pops.has_value()) {
-			(void)allocate_producer_workforce(upstream, *upstream_pops);
+			WorkforceAllocationResult allocation;
+			(void)allocate_producer_workforce(upstream, *upstream_pops, &allocation);
+			if (pending_provenance) {
+				pending_provenance->workforce = allocation;
+			}
 		}
 		ResourceFlowResult const source_flow =
 			source_network.fulfill(
@@ -499,6 +521,10 @@ public:
 
 		const AggregateProductionResult upstream_result = upstream.produce();
 		status.upstream_output = upstream_result.actual_output;
+		if (pending_provenance) {
+			pending_provenance->resource = source_flow;
+			pending_provenance->upstream = upstream_result;
+		}
 
 		const fixed_point_t physical_intermediate =
 			upstream.get_inventory(intermediate_good);
@@ -507,6 +533,11 @@ public:
 			access_table,
 			physical_intermediate
 		);
+		if (pending_provenance) {
+			pending_provenance->logistics = *access_table.get_access(
+				corridor.get_source_node(), corridor.get_destination_node()
+			);
+		}
 
 		const fixed_point_t deliverable =
 			access_table.calculate_deliverable_quantity(
@@ -552,6 +583,19 @@ public:
 
 		++status.completed_daily_ticks;
 		refresh_status_from_market();
+		if (pending_provenance) {
+			pending_provenance->cycle = status.completed_daily_ticks;
+			pending_provenance->upstream_market = upstream_bridge.get_cycle_result();
+			pending_provenance->downstream_market = downstream_bridge.get_cycle_result();
+			pending_provenance->market_price = status.intermediate_price;
+			pending_provenance->downstream = downstream_result;
+			completed_provenance = std::move(pending_provenance);
+			pending_provenance.reset();
+		}
+	}
+
+	[[nodiscard]] std::optional<LiveEconomyCycleProvenance> const& get_latest_provenance() const {
+		return completed_provenance;
 	}
 
 	[[nodiscard]] LiveEconomyStatus get_status() const {

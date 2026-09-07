@@ -529,3 +529,180 @@ TEST_CASE("Cadence prepares real POP availability before allocation and clearing
 		CHECK(status.downstream_output == fixed_point_t { available / 20 });
 	}
 }
+
+namespace {
+	struct ProvenanceRun {
+		LiveEconomyStatus status;
+		std::optional<LiveEconomyCycleProvenance> provenance;
+		pop_size_t unemployed;
+		uint64_t clearings;
+		bool operator==(ProvenanceRun const&) const = default;
+	};
+
+	ProvenanceRun run_provenance_case(
+		int workers, int transport_capacity, fixed_point_t source_availability, bool record = true
+	) {
+		LiveEconomyFixture fixture {
+			workforce_jobs(), pop_size_t { 10 }, ProductionType::template_type_t::PROCESS
+		};
+		GoodInstanceManager goods { fixture.definitions, fixture.rules };
+		WorkforcePopFixture population { fixture.rules, goods };
+		std::array pops { population.make_pop(population.eligible, 40, 1) };
+		if (workers < 40) {
+			pops[0].hire(pop_size_t { 40 - workers });
+		}
+		auto scenario = fixture.make_scenario();
+		scenario.corridor_legs[0].nominal_capacity = fixed_point_t { transport_capacity };
+		LiveEconomyRuntime runtime { fixture.rules, goods, scenario, record };
+		REQUIRE(runtime.set_source_resource_availability(source_availability));
+		CHECK_FALSE(runtime.get_latest_provenance().has_value());
+		uint64_t clearings = 0;
+		SimulationTimeline timeline;
+		REQUIRE(timeline.advance(24));
+		runtime.run_due_daily_cycles(SimTime { 0 }, timeline.current_time(),
+			[&](SimTime) -> std::optional<std::span<Pop>> { return std::span<Pop> { pops }; },
+			[&]() {
+				// A partial cycle must not escape through the completed-cycle API.
+				CHECK_FALSE(runtime.get_latest_provenance().has_value());
+				++clearings;
+				execute_intermediate_market(goods.get_good_instance_by_definition(*fixture.intermediate));
+			}
+		);
+		return { runtime.get_status(), runtime.get_latest_provenance(), pops[0].get_unemployed(), clearings };
+	}
+}
+
+TEST_CASE("Provenance distinguishes labor shortage from an equally costly delivery shortage",
+	"[economy][provenance][native-workforce]") {
+	auto full = run_provenance_case(40, 4, fixed_point_t::_1);
+	auto labor = run_provenance_case(20, 4, fixed_point_t::_1);
+	auto logistics = run_provenance_case(40, 2, fixed_point_t::_1);
+	REQUIRE(full.provenance.has_value());
+	REQUIRE(labor.provenance.has_value());
+	REQUIRE(logistics.provenance.has_value());
+	auto const& f = *full.provenance;
+	auto const& l = *labor.provenance;
+	auto const& t = *logistics.provenance;
+	CHECK(f.due_time == std::optional<SimTime> { SimTime { 24 } });
+	CHECK(f.cycle == 1);
+	CHECK(f.upstream_process_id == "live_upstream");
+	CHECK(f.intermediate_good_id == "intermediate");
+	REQUIRE(f.workforce.has_value());
+	REQUIRE(l.workforce.has_value());
+	CHECK(f.workforce->requested == fixed_point_t { 40 });
+	CHECK(f.workforce->allocated == fixed_point_t { 40 });
+	CHECK(l.workforce->allocated == fixed_point_t { 20 });
+	CHECK_FALSE(f.upstream.labor_limited);
+	CHECK(f.upstream.installed_ceiling_active);
+	CHECK(l.upstream.labor_limited);
+	CHECK_FALSE(l.upstream.installed_ceiling_active);
+	CHECK(l.upstream.potential_output == fixed_point_t { 4 });
+	CHECK(l.upstream.desired_output == fixed_point_t { 2 });
+	CHECK(l.upstream.actual_output == fixed_point_t { 2 });
+	CHECK(l.upstream.labor_supported_capacity == fixed_point_t { 2 });
+	CHECK_FALSE(l.upstream.input_limited);
+	CHECK_FALSE(l.logistics.is_delivery_limited());
+	CHECK(l.logistics.physical_supply == fixed_point_t { 2 });
+	CHECK(l.logistics.calculate_deliverable_quantity() == fixed_point_t { 2 });
+	CHECK_FALSE(t.upstream.labor_limited);
+	CHECK(t.upstream.actual_output == fixed_point_t { 4 });
+	CHECK(t.logistics.physical_supply == fixed_point_t { 4 });
+	CHECK(t.logistics.calculate_deliverable_quantity() == fixed_point_t { 2 });
+	CHECK(t.logistics.is_delivery_limited());
+	CHECK(l.downstream.actual_output == t.downstream.actual_output);
+	CHECK(l.downstream.actual_output == fixed_point_t { 1 });
+	CHECK(l.downstream.input_limited);
+	CHECK(t.downstream.input_limited);
+	CHECK(f.downstream.actual_output == fixed_point_t { 2 });
+	CHECK(f.upstream_market.output_offered == fixed_point_t { 4 });
+	CHECK(f.upstream_market.output_sold == fixed_point_t { 4 });
+	CHECK(l.upstream_market.output_offered == fixed_point_t { 2 });
+	CHECK(l.upstream_market.output_sold == fixed_point_t { 2 });
+	CHECK(t.upstream_market.output_offered == fixed_point_t { 4 });
+	CHECK(t.upstream_market.output_sold == fixed_point_t { 2 });
+	CHECK(t.downstream_market.input_requested == fixed_point_t { 8 });
+	CHECK(t.downstream_market.input_ordered == fixed_point_t { 2 });
+	CHECK(t.downstream_market.input_bought == fixed_point_t { 2 });
+	CHECK_FALSE(t.downstream_market.transaction_limited());
+	CHECK_FALSE(l.downstream_market.transaction_limited());
+}
+
+TEST_CASE("Provenance records resource shortfall and simultaneous production ceilings",
+	"[economy][provenance][resources]") {
+	auto resource = run_provenance_case(40, 4, fixed_point_t::_0_50);
+	REQUIRE(resource.provenance.has_value());
+	auto const& p = *resource.provenance;
+	CHECK(p.resource.requested == fixed_point_t { 4 });
+	CHECK(p.resource.nominal_supply == fixed_point_t { 4 });
+	CHECK(p.resource.physical_supply == fixed_point_t { 2 });
+	CHECK(p.resource.accessible_supply == fixed_point_t { 2 });
+	CHECK(p.resource.delivered == fixed_point_t { 2 });
+	CHECK(p.resource.buffer_draw == fixed_point_t::_0);
+	CHECK(p.resource.unmet == fixed_point_t { 2 });
+	CHECK(p.resource.source_availability_limited);
+	CHECK_FALSE(p.resource.source_access_limited);
+	CHECK(p.upstream.input_limited);
+	CHECK(p.upstream.input_below_potential);
+	CHECK_FALSE(p.upstream.labor_limited);
+	CHECK(p.upstream.actual_output == fixed_point_t { 2 });
+	CHECK(p.downstream.input_limited);
+	CHECK(p.downstream.actual_output == fixed_point_t { 1 });
+	auto combined = run_provenance_case(20, 4, fixed_point_t::_0_50);
+	REQUIRE(combined.provenance.has_value());
+	CHECK(combined.provenance->upstream.labor_limited);
+	CHECK(combined.provenance->upstream.input_below_potential);
+	CHECK(combined.provenance->upstream.input_supported_output == std::optional<fixed_point_t> { 2 });
+	// Equal labor/input ceilings are both retained, although the input pass
+	// did not further reduce the already labor-limited desired output.
+	CHECK_FALSE(combined.provenance->upstream.input_limited);
+}
+
+TEST_CASE("Provenance recording is observational and deterministic",
+	"[economy][provenance][determinism]") {
+	for (int workers : { 20, 40 }) {
+		for (int transport : { 2, 4 }) {
+			for (fixed_point_t availability : { fixed_point_t::_0_50, fixed_point_t::_1 }) {
+				auto recorded = run_provenance_case(workers, transport, availability);
+				auto unrecorded = run_provenance_case(workers, transport, availability, false);
+				auto repeated = run_provenance_case(workers, transport, availability);
+				CHECK(recorded == repeated);
+				CHECK(recorded.status == unrecorded.status); // Includes price, inventories and trades.
+				CHECK(recorded.unemployed == unrecorded.unemployed);
+				CHECK(recorded.unemployed == pop_size_t { 0 });
+				CHECK(recorded.clearings == unrecorded.clearings);
+				CHECK(recorded.clearings == 1);
+				CHECK(recorded.status.completed_daily_ticks == 1);
+				CHECK_FALSE(unrecorded.provenance.has_value());
+			}
+		}
+	}
+}
+
+TEST_CASE("Provenance retains only the completed cycle and respects cadence partitions",
+	"[economy][provenance][cadence-authority]") {
+	CadencedEconomyFixture whole;
+	CadencedEconomyFixture split;
+	whole.advance(72);
+	split.advance(23);
+	CHECK_FALSE(split.runtime.get_latest_provenance().has_value());
+	split.advance(1);
+	auto first = split.runtime.get_latest_provenance();
+	REQUIRE(first.has_value());
+	CHECK(first->cycle == 1);
+	split.advance(25);
+	split.advance(23);
+	CHECK(split.runtime.get_latest_provenance() == whole.runtime.get_latest_provenance());
+	REQUIRE(split.runtime.get_latest_provenance().has_value());
+	CHECK(split.runtime.get_latest_provenance()->cycle == 3);
+	CHECK(split.runtime.get_latest_provenance()->due_time == std::optional<SimTime> { SimTime { 72 } });
+	CHECK_FALSE(split.runtime.get_latest_provenance()->workforce.has_value());
+	CHECK_FALSE(split.runtime.get_latest_provenance()->upstream.workforce_enabled);
+	CHECK(first->cycle == 1); // Earlier value copies remain immutable.
+	auto latest = split.runtime.get_latest_provenance();
+	split.runtime.pre_market_daily_tick();
+	CHECK(split.runtime.get_latest_provenance() == latest);
+	execute_intermediate_market(split.goods.get_good_instance_by_definition(*split.definitions.intermediate));
+	split.runtime.post_market_daily_tick();
+	CHECK(split.runtime.get_latest_provenance()->cycle == 4);
+	CHECK_FALSE(split.runtime.get_latest_provenance()->due_time.has_value());
+}

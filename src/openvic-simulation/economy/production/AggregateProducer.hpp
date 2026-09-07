@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -15,6 +16,24 @@ struct AggregateProductionResult final {
 	fixed_point_t desired_output = 0;
 	fixed_point_t actual_output = 0;
 	bool input_limited = false;
+	// Capacity-stage facts, before inputs are consumed. Potential includes
+	// utilization but excludes labor/input limits; it is not external demand.
+	fixed_point_t installed_capacity = 0;
+	fixed_point_t utilization = 0;
+	fixed_point_t potential_output = 0;
+	bool workforce_enabled = false;
+	fixed_point_t workforce_required = 0;
+	fixed_point_t available_workforce = 0;
+	fixed_point_t labor_supported_capacity = 0;
+	std::optional<fixed_point_t> input_supported_output;
+	bool labor_limited = false;
+	// The installed ceiling participates in min(installed, labor-supported).
+	// This does not claim unmet expansion demand, which this producer lacks.
+	bool installed_ceiling_active = false;
+	bool utilization_limited = false;
+	bool input_below_potential = false;
+
+	bool operator==(AggregateProductionResult const&) const = default;
 };
 
 class AggregateProducer final {
@@ -115,6 +134,28 @@ public:
 			.actual_output = desired_output,
 			.input_limited = false
 		};
+		result.installed_capacity = capacity;
+		result.utilization = utilization;
+		result.potential_output = production_type.base_output_quantity * capacity * utilization;
+		result.workforce_enabled = workforce_constraint_enabled;
+		result.workforce_required = capacity * fixed_point_t { type_safe::get(production_type.base_workforce_size) };
+		result.available_workforce = available_workforce;
+		result.labor_supported_capacity = calculate_labor_supported_capacity();
+		result.labor_limited = desired_output < result.potential_output;
+		result.installed_ceiling_active = capacity <= result.labor_supported_capacity;
+		result.utilization_limited = utilization < fixed_point_t::_1
+			&& production_type.base_output_quantity * capacity > fixed_point_t::_0;
+		// Retain the independent input ceiling even when labor is tighter or
+		// output is zero. This read-only pass does not affect production choices.
+		for (auto const& [good, input_per_output] : production_type.input_goods) {
+			if (input_per_output <= 0) { continue; }
+			fixed_point_t const feasible = get_inventory(*good) / input_per_output;
+			if (!result.input_supported_output || feasible < *result.input_supported_output) {
+				result.input_supported_output = feasible;
+			}
+		}
+		result.input_below_potential = result.input_supported_output.has_value()
+			&& *result.input_supported_output < result.potential_output;
 
 		if (result.actual_output <= 0) {
 			result.actual_output = 0;

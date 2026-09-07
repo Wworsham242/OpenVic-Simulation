@@ -60,6 +60,12 @@ struct ResourceFlowResult final {
 	fixed_point_t buffer_store = 0;
 	fixed_point_t delivered = 0;
 	fixed_point_t unmet = 0;
+	fixed_point_t requested = 0;
+	// Source availability before transport/access constraints.
+	fixed_point_t physical_supply = 0;
+	bool source_availability_limited = false;
+	bool source_access_limited = false;
+	bool operator==(ResourceFlowResult const&) const = default;
 };
 
 class ResourceSupplyNetwork final {
@@ -197,6 +203,11 @@ public:	ResourceSupplyNetwork() = default;
 			.nominal_supply = nominal_supply_per_tick(),
 			.accessible_supply = deliverable_supply_per_tick(access)
 		};
+		result.requested = std::max(demand, fixed_point_t::_0);
+		result.physical_supply = accessible_supply_per_tick();
+		// These describe lost direct flow, even if a buffer masks the shortfall.
+		result.source_availability_limited = result.physical_supply < std::min(result.nominal_supply, result.requested);
+		result.source_access_limited = result.accessible_supply < std::min(result.physical_supply, result.requested);
 
 		if (demand <= fixed_point_t::_0) {
 			result.buffer_store = buffer.store(result.accessible_supply);
