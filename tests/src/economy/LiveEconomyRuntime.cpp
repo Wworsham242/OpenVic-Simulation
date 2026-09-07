@@ -1,4 +1,5 @@
 #include "openvic-simulation/economy/LiveEconomyRuntime.hpp"
+#include "openvic-simulation/core/simulation/SimulationTimeline.hpp"
 
 #include <array>
 #include <optional>
@@ -370,4 +371,161 @@ TEST_CASE("Native workforce allocation caps hires and respects existing employme
 	CHECK(third.calculate_desired_output() == fixed_point_t::_0);
 	CHECK(allocate_producer_workforce(first, {}) == fixed_point_t::_0);
 	CHECK(first.calculate_desired_output() == fixed_point_t::_0);
+}
+
+namespace {
+	struct CadencedEconomyFixture {
+		LiveEconomyFixture definitions;
+		GoodInstanceManager goods { definitions.definitions, definitions.rules };
+		LiveEconomyScenarioDefinition scenario = definitions.make_scenario();
+		LiveEconomyRuntime runtime { definitions.rules, goods, scenario };
+		SimulationTimeline timeline;
+		std::vector<SimTime> due_times;
+		uint64_t market_clearings = 0;
+
+		void advance(int64_t ticks) {
+			SimTime const previous = timeline.current_time();
+			REQUIRE(timeline.advance(ticks));
+			runtime.run_due_daily_cycles(previous, timeline.current_time(),
+				[&](SimTime due) -> std::optional<std::span<Pop>> {
+					// The preceding cycle must have finished before the next begins.
+					CHECK(runtime.get_status().completed_daily_ticks == market_clearings);
+					due_times.push_back(due);
+					return std::nullopt;
+				},
+				[&]() {
+					CHECK(runtime.get_status().completed_daily_ticks == market_clearings);
+					CHECK(runtime.get_status().upstream_output == fixed_point_t { 4 });
+					++market_clearings;
+					execute_intermediate_market(goods.get_good_instance_by_definition(*definitions.intermediate));
+				}
+			);
+			CHECK(runtime.get_status().completed_daily_ticks == market_clearings);
+		}
+	};
+}
+
+TEST_CASE("Economy cadence waits for the boundary and executes exactly once",
+	"[economy][cadence-authority]") {
+	CadencedEconomyFixture fixture;
+	fixture.advance(0);
+	fixture.advance(23);
+	CHECK(fixture.market_clearings == 0);
+	CHECK(fixture.due_times.empty());
+	CHECK(fixture.runtime.get_status().completed_daily_ticks == 0);
+	CHECK(fixture.runtime.get_status().upstream_output == fixed_point_t::_0);
+	CHECK(fixture.runtime.get_status().final_inventory == fixed_point_t::_0);
+	fixture.advance(1);
+	CHECK(fixture.market_clearings == 1);
+	CHECK(fixture.due_times == std::vector<SimTime> { SimTime { 24 } });
+	CHECK(fixture.runtime.get_status().completed_daily_ticks == 1);
+	CHECK(fixture.runtime.get_status().intermediate_quantity_traded_yesterday == fixed_point_t { 4 });
+	CHECK(fixture.runtime.get_status().final_inventory == fixed_point_t { 2 });
+	fixture.advance(0);
+	fixture.advance(23);
+	CHECK(fixture.market_clearings == 1);
+	CHECK(fixture.runtime.get_status().final_inventory == fixed_point_t { 2 });
+	fixture.advance(1);
+	CHECK(fixture.market_clearings == 2);
+	CHECK(fixture.runtime.get_status().completed_daily_ticks == 2);
+	CHECK(fixture.runtime.get_status().final_inventory == fixed_point_t { 4 });
+}
+
+TEST_CASE("Economy cadence is invariant to time advance partitioning",
+	"[economy][cadence-authority][determinism]") {
+	CadencedEconomyFixture whole;
+	whole.advance(72);
+	REQUIRE(whole.market_clearings == 3);
+	CHECK(whole.due_times == std::vector<SimTime> { SimTime { 24 }, SimTime { 48 }, SimTime { 72 } });
+	for (auto const& steps : std::vector<std::vector<int64_t>> {
+		{ 24, 24, 24 }, { 5, 19, 25, 0, 23 }, { 25, 47 }, { 1, 70, 1 }
+	}) {
+		CadencedEconomyFixture split;
+		// Periodic dispatch must not consume exceptional scheduled work.
+		REQUIRE(split.timeline.schedule_event(SimTime { 24 }, { "first", {} }).has_value());
+		REQUIRE(split.timeline.schedule_event(SimTime { 24 }, { "second", {} }).has_value());
+		for (int64_t step : steps) {
+			split.advance(step);
+		}
+		CHECK(split.timeline.current_time() == whole.timeline.current_time());
+		CHECK(split.due_times == whole.due_times);
+		CHECK(split.market_clearings == whole.market_clearings);
+		auto const expected = whole.runtime.get_status();
+		auto const actual = split.runtime.get_status();
+		CHECK(actual.completed_daily_ticks == expected.completed_daily_ticks);
+		CHECK(actual.upstream_output == expected.upstream_output);
+		CHECK(actual.downstream_output == expected.downstream_output);
+		CHECK(actual.downstream_desired_output == expected.downstream_desired_output);
+		CHECK(actual.downstream_input_limited == expected.downstream_input_limited);
+		CHECK(actual.source_buffer_inventory == expected.source_buffer_inventory);
+		CHECK(actual.source_unmet_inflow == expected.source_unmet_inflow);
+		CHECK(actual.intermediate_upstream_inventory == expected.intermediate_upstream_inventory);
+		CHECK(actual.intermediate_downstream_inventory == expected.intermediate_downstream_inventory);
+		CHECK(actual.final_inventory == expected.final_inventory);
+		CHECK(actual.final_inventory == fixed_point_t { 6 });
+		CHECK(actual.deliverable_intermediate == expected.deliverable_intermediate);
+		CHECK(actual.intermediate_price == expected.intermediate_price);
+		CHECK(actual.intermediate_supply_yesterday == expected.intermediate_supply_yesterday);
+		CHECK(actual.intermediate_demand_yesterday == expected.intermediate_demand_yesterday);
+		CHECK(actual.intermediate_quantity_traded_yesterday == expected.intermediate_quantity_traded_yesterday);
+		auto first = split.timeline.pop_due_event();
+		auto second = split.timeline.pop_due_event();
+		REQUIRE(first.has_value());
+		REQUIRE(second.has_value());
+		CHECK(first->payload.type_id == "first");
+		CHECK(second->payload.type_id == "second");
+		CHECK(first->sequence < second->sequence);
+		CHECK_FALSE(split.timeline.pop_due_event().has_value());
+	}
+}
+
+TEST_CASE("Cadence prepares real POP availability before allocation and clearing",
+	"[economy][cadence-authority][native-workforce]") {
+	for (int const already_employed : { 0, 20 }) {
+		LiveEconomyFixture fixture {
+			workforce_jobs(), pop_size_t { 10 }, ProductionType::template_type_t::PROCESS
+		};
+		GoodInstanceManager goods { fixture.definitions, fixture.rules };
+		WorkforcePopFixture population { fixture.rules, goods };
+		std::array pops { population.make_pop(population.eligible, 40, 1) };
+		auto scenario = fixture.make_scenario();
+		LiveEconomyRuntime runtime { fixture.rules, goods, scenario };
+		SimulationTimeline timeline;
+		uint64_t prepared = 0;
+		uint64_t cleared = 0;
+		auto prepare = [&](SimTime due) -> std::optional<std::span<Pop>> {
+			CHECK(due == SimTime { 24 });
+			CHECK(cleared == 0);
+			++prepared;
+			// Fresh real POP state starts unemployed. Existing employers take
+			// their share before this cycle's workforce allocation runs.
+			if (already_employed > 0) {
+				pops[0].hire(pop_size_t { already_employed });
+			}
+			return std::span<Pop> { pops };
+		};
+		auto clear = [&]() {
+			CHECK(prepared == 1);
+			CHECK(pops[0].get_unemployed() == pop_size_t { 0 });
+			CHECK(runtime.get_status().completed_daily_ticks == 0);
+			++cleared;
+			execute_intermediate_market(goods.get_good_instance_by_definition(*fixture.intermediate));
+		};
+		REQUIRE(timeline.advance(23));
+		runtime.run_due_daily_cycles(SimTime { 0 }, timeline.current_time(), prepare, clear);
+		CHECK(prepared == 0);
+		CHECK(cleared == 0);
+		CHECK(pops[0].get_unemployed() == pop_size_t { 40 });
+		REQUIRE(timeline.advance(1));
+		runtime.run_due_daily_cycles(SimTime { 23 }, timeline.current_time(), prepare, clear);
+		CHECK(prepared == 1);
+		CHECK(cleared == 1);
+		auto const status = runtime.get_status();
+		int const available = 40 - already_employed;
+		CHECK(status.completed_daily_ticks == 1);
+		CHECK(status.upstream_output == fixed_point_t { available / 10 });
+		CHECK(status.intermediate_supply_yesterday == fixed_point_t { available / 10 });
+		CHECK(status.intermediate_quantity_traded_yesterday == fixed_point_t { available / 10 });
+		CHECK(status.downstream_output == fixed_point_t { available / 20 });
+	}
 }

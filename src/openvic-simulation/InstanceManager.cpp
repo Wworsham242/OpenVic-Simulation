@@ -184,11 +184,10 @@ void InstanceManager::update_gamestate() {
  */
 void InstanceManager::tick() {
 
-	// FOUNDATION-003 compatibility seam:
-	// legacy Victoria execution still advances one Date day at a time, while the
-	// generalized engine timeline records 24 unitless ticks per successful legacy day.
-	// No gameplay subsystem reads simulation_timeline yet.
+	// The legacy day remains a compatibility driver. The live economy consumes
+	// crossed SimTime cadence boundaries, independently of the Date calendar.
 	static constexpr int64_t LEGACY_DAY_SIMULATION_TICKS = 24;
+	SimTime const previous_time = simulation_timeline.current_time();
 	if (!simulation_timeline.advance(LEGACY_DAY_SIMULATION_TICKS)) {
 		spdlog::error_s("Simulation timeline could not advance; refusing legacy daily tick.");
 		return;
@@ -201,14 +200,22 @@ void InstanceManager::tick() {
 	// Tick...
 	country_instance_manager.country_manager_tick_before_map();
 	map_instance.map_tick();
-	if (live_economy_runtime != nullptr) {
-		live_economy_runtime->pre_market_daily_tick();
-	}
 
-	market_instance.execute_orders();
-
+	// A single clearing operation is shared by cadence-driven live economies and
+	// the legacy-only fallback. Never clear again outside this dispatch.
+	auto clear_market = [this]() { market_instance.execute_orders(); };
 	if (live_economy_runtime != nullptr) {
-		live_economy_runtime->post_market_daily_tick();
+		live_economy_runtime->run_due_daily_cycles(
+			previous_time, simulation_timeline.current_time(),
+			[](SimTime) -> std::optional<std::span<Pop>> {
+				// map_tick has completed POP reset and existing RGO employment.
+				// Routing a local upstream POP pool remains behind A5's seam.
+				return std::nullopt;
+			},
+			clear_market
+		);
+	} else {
+		clear_market();
 	}
 	country_instance_manager.country_manager_tick_after_map();
 	unit_instance_manager.tick();

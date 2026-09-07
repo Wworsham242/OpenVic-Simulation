@@ -1132,3 +1132,29 @@ TEST_CASE(
 
 	REQUIRE(manager.end_game_session());
 }
+TEST_CASE("Legacy days dispatch exactly one cadenced live economy cycle",
+	"[convergence][native-ruleset][cadence-authority]") {
+	GameManager manager { []() {}, []() -> uint64_t { return 0; }, []() -> uint64_t { return 0; } };
+	auto const data_root = std::filesystem::path { __FILE__ }.parent_path().parent_path()
+		/ "data" / "native-ruleset-bootstrap";
+	REQUIRE(manager.load_native_economy_bootstrap(data_root));
+	REQUIRE(manager.setup_native_instance());
+	auto* instance = manager.get_instance_manager();
+	REQUIRE(instance != nullptr);
+	REQUIRE(manager.start_game_session());
+	CHECK(instance->get_live_economy_status().completed_daily_ticks == 0);
+	for (uint64_t day = 1; day <= 3; ++day) {
+		instance->force_tick_and_update();
+		CHECK(instance->get_simulation_time() == SimTime { static_cast<int64_t>(24 * day) });
+		auto const status = instance->get_live_economy_status();
+		CHECK(status.completed_daily_ticks == day);
+		CHECK(status.upstream_output == fixed_point_t { 4 });
+		// A second clearing would overwrite the market totals with zero;
+		// clearing before pre-market work would leave these orders unfilled.
+		CHECK(status.intermediate_supply_yesterday == fixed_point_t { 4 });
+		CHECK(status.intermediate_quantity_traded_yesterday == fixed_point_t { 4 });
+		CHECK(status.downstream_output == fixed_point_t { 2 });
+		CHECK(status.final_inventory == fixed_point_t { static_cast<int32_t>(2 * day) });
+	}
+	REQUIRE(manager.end_game_session());
+}

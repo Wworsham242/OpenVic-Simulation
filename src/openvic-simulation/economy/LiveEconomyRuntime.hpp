@@ -6,6 +6,7 @@
 #include <utility>
 #include <vector>
 
+#include "openvic-simulation/core/simulation/Cadence.hpp"
 #include "openvic-simulation/economy/BuildingType.hpp"
 #include "openvic-simulation/economy/GoodInstance.hpp"
 #include "openvic-simulation/economy/LiveEconomyScenario.hpp"
@@ -255,6 +256,9 @@ private:
 	}
 
 public:
+	// Migration mapping only: SimTime itself remains unitless.
+	static constexpr Cadence DAILY_CADENCE = *Cadence::create(24);
+
 	LiveEconomyRuntime(
 		GameRulesManager const& new_game_rules_manager,
 		GoodInstanceManager& new_good_instance_manager,
@@ -450,6 +454,26 @@ public:
 		bool open
 	) {
 		return logistics_graph.set_edge_open(edge_id, open);
+	}
+
+	/// Consume the cadence boundaries in (previous, current] for one successful
+	/// timeline advance. Call once per advance, using consecutive intervals.
+	/// Cadence owns periodic timing; no event queue or timing cursor is duplicated.
+	/// prepare_workforce runs once per due boundary and returns A5's optional POP
+	/// pool after employment reset/availability preparation. clear_market must use
+	/// the caller's authoritative market, including all other producers' orders.
+	template<typename PrepareWorkforce, typename ClearMarket>
+	void run_due_daily_cycles(
+		SimTime previous, SimTime current,
+		PrepareWorkforce&& prepare_workforce, ClearMarket&& clear_market
+	) {
+		for (auto due = DAILY_CADENCE.next_after(previous);
+			due.has_value() && *due <= current;
+			due = DAILY_CADENCE.next_after(*due)) {
+			pre_market_daily_tick(prepare_workforce(*due));
+			clear_market();
+			post_market_daily_tick();
+		}
 	}
 
 	// Supply the current local POP pool after the day's employment reset.
