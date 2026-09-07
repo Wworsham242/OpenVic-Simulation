@@ -89,6 +89,12 @@ namespace {
 				fixed_point_map_t<GoodDefinition const*> {},
 				false, false, false
 			);
+
+			// Runtime instances consume immutable, index-stable good definitions.
+			// This fixture is its own definition loader, so it must finalize the
+			// registries before constructing GoodInstanceManager.
+			definitions.lock_good_categories();
+			definitions.lock_good_definitions();
 		}
 
 		LiveEconomyScenarioDefinition make_scenario() const {

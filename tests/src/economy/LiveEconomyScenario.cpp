@@ -93,6 +93,10 @@ namespace {
 				false,
 				false
 			);
+
+			// Runtime instances require immutable, index-stable definitions.
+			definitions.lock_good_categories();
+			definitions.lock_good_definitions();
 		}
 
 		LiveEconomyScenarioDefinition make_scenario(

@@ -191,13 +191,34 @@ bool GameManager::load_definitions(Dataloader::localisation_callback_t localisat
 	return ret;
 }
 
-bool GameManager::setup_instance(Bookmark const& bookmark) {
-	if (instance_manager) {
-		spdlog::error_s("Trying to setup a new game instance while one is already setup!");
-		return false;
+void GameManager::finalize_instance_definition_registries() {
+	auto& good_definition_manager =
+		definition_manager.get_economy_manager().get_good_definition_manager();
+	if (!good_definition_manager.good_categories_are_locked()) {
+		good_definition_manager.lock_good_categories();
+	}
+	if (!good_definition_manager.good_definitions_are_locked()) {
+		good_definition_manager.lock_good_definitions();
 	}
 
-	SPDLOG_INFO("Initialising new game instance.");
+	auto& country_definition_manager = definition_manager.get_country_definition_manager();
+	if (!country_definition_manager.country_definitions_are_locked()) {
+		country_definition_manager.lock_country_definitions();
+	}
+
+	auto& map_definition = definition_manager.get_map_definition();
+	if (!map_definition.province_definitions_are_locked()) {
+		map_definition.lock_province_definitions();
+	}
+}
+
+bool GameManager::setup_native_instance() {
+	if (instance_manager) {
+		spdlog::error_s("Trying to setup a native game instance while one is already setup!");
+		return false;
+	}	SPDLOG_INFO("Initialising native game instance.");
+
+	finalize_instance_definition_registries();
 
 	instance_manager.emplace(
 		game_rules_manager,
@@ -205,15 +226,29 @@ bool GameManager::setup_instance(Bookmark const& bookmark) {
 		gamestate_updated_callback
 	);
 
-	SPDLOG_INFO("Setting up new game instance.");
+	SPDLOG_INFO("Setting up native game instance without legacy bookmark/history.");
 
-	bool ret = instance_manager->setup();
+	if (!instance_manager->setup()) {
+		instance_manager.reset();
+		return false;
+	}
 
-	SPDLOG_INFO("Loading bookmark \"{}\" for new game instance.", bookmark.get_identifier());
+	return true;
+}
 
-	ret &= instance_manager->load_bookmark(bookmark);
+bool GameManager::setup_instance(Bookmark const& bookmark) {
+	if (!setup_native_instance()) {
+		return false;
+	}
 
-	return ret;
+	SPDLOG_INFO("Loading bookmark \"{}\" for compatibility game instance.", bookmark.get_identifier());
+
+	if (!instance_manager->load_bookmark(bookmark)) {
+		instance_manager.reset();
+		return false;
+	}
+
+	return true;
 }
 
 bool GameManager::is_game_instance_setup() const {

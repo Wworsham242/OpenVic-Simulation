@@ -26,8 +26,12 @@ namespace OpenVic {
 		DefinitionManager PROPERTY(definition_manager);
 		ModManager PROPERTY(mod_manager);
 		std::optional<InstanceManager> instance_manager;
-
 		InstanceManager::gamestate_updated_func_t gamestate_updated_callback;
+
+		/// Finalize the immutable definition registries required by runtime
+		/// construction. Compatibility loading normally does this earlier;
+		/// native rulesets need the same lifecycle without a Victoria loader.
+		void finalize_instance_definition_registries();
 		bool PROPERTY_CUSTOM_PREFIX(definitions_loaded, are);
 		bool PROPERTY_CUSTOM_PREFIX(mod_descriptors_loaded, are);
 
@@ -62,7 +66,13 @@ namespace OpenVic {
 		bool load_mods(memory::vector<memory::string> const& mods_to_find);
 
 		bool load_definitions(Dataloader::localisation_callback_t localisation_callback);
+		/// Construct and initialise the authoritative runtime without loading a
+		/// legacy bookmark. Native scenario/bootstrap state is applied through
+		/// generalized runtime owners after this boundary.
+		bool setup_native_instance();
 
+		/// Legacy compatibility entry point. Constructs the same authoritative
+		/// runtime, then applies bookmark/history state.
 		bool setup_instance(Bookmark const& bookmark);
 		bool is_game_instance_setup() const;
 		bool is_bookmark_loaded() const;
