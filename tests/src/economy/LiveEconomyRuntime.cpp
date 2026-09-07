@@ -1012,29 +1012,143 @@ TEST_CASE("Reduced province population limits output without borrowing unrelated
 	CHECK(world.province("2").get_mutable_pops().begin()->get_unemployed() == pop_size_t { 100 });
 }
 
-TEST_CASE("Site binding validates identity and uses only residual authoritative unemployment",
-	"[economy][productive-site][validation]") {
-	BoundWorldFixture world;
-	auto invalid = world.binding;
-	invalid.province_id = "missing";
-	CHECK_FALSE(world.runtime.bind_upstream_site(invalid, *world.map));
-	invalid = world.binding;
-	invalid.building_id = "missing";
-	CHECK_FALSE(world.runtime.bind_upstream_site(invalid, *world.map));
-	invalid = world.binding;
-	invalid.production_type_id = "live_downstream";
-	CHECK_FALSE(world.runtime.bind_upstream_site(invalid, *world.map));
-	CHECK_FALSE(world.binding.resolve(*world.map, *world.economy.downstream_process).has_value());
-	invalid = world.binding;
-	invalid.labor_scope = static_cast<LaborPoolScope>(99);
-	CHECK_FALSE(world.runtime.bind_upstream_site(invalid, *world.map));
-	// Model employment already claimed by the inherited earlier employer phase.
-	world.province("1").get_mutable_pops().begin()->hire(pop_size_t { 20 });
-	world.cycle();
-	auto p = world.runtime.get_latest_provenance();
-	REQUIRE(p.has_value());
-	REQUIRE(p->workforce.has_value());
-	CHECK(p->workforce->allocated == fixed_point_t { 20 });
-	CHECK(p->upstream.labor_limited);
-	CHECK(p->productive_site == std::optional<ProductiveSiteBinding> { world.binding });
+TEST_CASE(
+"Site binding validates world identity and labor scope",
+"[economy][productive-site][validation]"
+) {
+BoundWorldFixture world;
+
+auto invalid = world.binding;
+invalid.province_id = "missing";
+CHECK_FALSE(world.runtime.bind_upstream_site(invalid, *world.map));
+
+invalid = world.binding;
+invalid.building_id = "missing";
+CHECK_FALSE(world.runtime.bind_upstream_site(invalid, *world.map));
+
+invalid = world.binding;
+invalid.production_type_id = "live_downstream";
+CHECK_FALSE(world.runtime.bind_upstream_site(invalid, *world.map));
+CHECK_FALSE(
+world.binding.resolve(
+*world.map,
+*world.economy.downstream_process
+).has_value()
+);
+
+invalid = world.binding;
+invalid.labor_scope = static_cast<LaborPoolScope>(99);
+CHECK_FALSE(world.runtime.bind_upstream_site(invalid, *world.map));
+}
+
+TEST_CASE(
+"World bound producer consumes a shared workforce assignment without rehiring",
+"[economy][productive-site][world][competition][b3]"
+) {
+BoundWorldFixture world;
+
+// Give the real bound province a finite labor supply large enough for
+// both employers to request workers but not both to receive everything.
+world.replace_population("1", 60);
+
+auto workforce = world.runtime.prepare_upstream_site(*world.map);
+REQUIRE(workforce.has_value());
+
+AggregateProducer& producer =
+world.runtime.get_upstream_producer_for_workforce_allocation();
+
+TestEmployer competing_employer;
+
+WorkforceEmployerRequest producer_request =
+make_producer_workforce_request(
+producer,
+"site:1:plant",
+2
+);
+
+WorkforceEmployerRequest competing_request =
+competing_employer.request(
+"other:1",
+1,
+40
+);
+
+fixed_point_t const requested = producer_request.requested;
+
+auto allocations = allocate_competing_employers(
+{
+producer_request,
+competing_request
+},
+*workforce
+);
+
+REQUIRE(allocations.size() == 2);
+
+fixed_point_t producer_allocated = fixed_point_t::_0;
+
+for (WorkforceEmployerAllocation const& allocation : allocations) {
+if (allocation.employer_id == "site:1:plant") {
+producer_allocated = allocation.allocated;
+}
+}
+
+// Building level 2 × capacity-per-level 2 × base workforce 10.
+CHECK(requested == fixed_point_t { 40 });
+CHECK(producer_allocated == fixed_point_t { 40 });
+
+// Only the remaining 20 workers can go to the competing employer.
+CHECK(competing_employer.assigned == fixed_point_t { 20 });
+
+auto& pop = *world.province("1").get_mutable_pops().begin();
+
+CHECK(pop.get_unemployed() == pop_size_t { 0 });
+
+world.runtime.set_preallocated_upstream_workforce(
+WorkforceAllocationResult {
+.requested = requested,
+.allocated = producer_allocated
+}
+);
+
+SimTime const previous = world.timeline.current_time();
+REQUIRE(world.timeline.advance(24));
+
+world.runtime.run_due_daily_cycles(
+previous,
+world.timeline.current_time(),
+
+// Returning no workforce is deliberate: the authoritative shared
+// allocator already hired the workers. The runtime must consume that
+// assignment rather than hire them again.
+[&](SimTime) -> std::optional<WorkforcePool> {
+return std::nullopt;
+},
+
+[&]() {
+++world.clearings;
+execute_intermediate_market(
+world.goods.get_good_instance_by_definition(
+*world.economy.intermediate
+)
+);
+}
+);
+
+auto provenance = world.runtime.get_latest_provenance();
+REQUIRE(provenance.has_value());
+REQUIRE(provenance->workforce.has_value());
+
+CHECK(provenance->workforce->requested == fixed_point_t { 40 });
+CHECK(provenance->workforce->allocated == fixed_point_t { 40 });
+
+// The producer retained the shared assignment and produced at full
+// installed capacity without a second Pop::hire pass.
+CHECK(provenance->upstream.installed_capacity == fixed_point_t { 4 });
+CHECK(provenance->upstream.actual_output == fixed_point_t { 4 });
+CHECK(provenance->upstream_market.output_sold == fixed_point_t { 4 });
+CHECK(provenance->downstream.actual_output == fixed_point_t { 2 });
+
+CHECK(pop.get_unemployed() == pop_size_t { 0 });
+CHECK(world.clearings == 1);
 }
