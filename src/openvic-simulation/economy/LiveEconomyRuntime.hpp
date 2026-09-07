@@ -1,12 +1,17 @@
 #pragma once
 
 #include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 #include "openvic-simulation/economy/GoodInstance.hpp"
 #include "openvic-simulation/economy/LiveEconomyScenario.hpp"
 #include "openvic-simulation/economy/production/AggregateProducer.hpp"
 #include "openvic-simulation/economy/production/AggregateProducerMarketBridge.hpp"
 #include "openvic-simulation/economy/trading/MarketNodeAccess.hpp"
+#include "openvic-simulation/economy/trading/SharedTransportCapacity.hpp"
 #include "openvic-simulation/economy/trading/TransportCorridor.hpp"
 #include "openvic-simulation/misc/GameRulesManager.hpp"
 #include "openvic-simulation/resources/ResourceSupply.hpp"
@@ -19,16 +24,19 @@ struct ResourceSourceRoute final {
 	TransportCorridor corridor;
 	bool access_allowed = true;
 	fixed_point_t accessible_fraction = fixed_point_t::_1;
+	std::string shared_capacity_id;
 
 	ResourceSourceRoute(
 		std::string new_source_id,
 		TransportCorridor new_corridor,
 		bool new_access_allowed = true,
-		fixed_point_t new_accessible_fraction = fixed_point_t::_1
+		fixed_point_t new_accessible_fraction = fixed_point_t::_1,
+		std::string new_shared_capacity_id = {}
 	) : source_id { std::move(new_source_id) },
 		corridor { std::move(new_corridor) },
 		access_allowed { new_access_allowed },
-		accessible_fraction { new_accessible_fraction } {}
+		accessible_fraction { new_accessible_fraction },
+		shared_capacity_id { std::move(new_shared_capacity_id) } {}
 };
 
 struct LiveEconomyStatus final {
@@ -68,8 +76,8 @@ private:
 	LiveEconomyScenarioDefinition const& scenario;
 
 	ResourceSupplyNetwork source_network;
-
 	std::vector<ResourceSourceRoute> resource_routes;
+	std::vector<SharedTransportCapacity> shared_transport_capacities;
 
 	GoodDefinition const& intermediate_good;
 	GoodDefinition const& final_good;
@@ -98,6 +106,32 @@ private:
 			});
 		}
 
+		for (SharedTransportCapacity const& shared : shared_transport_capacities) {
+			std::vector<SharedTransportRequest> requests;
+			std::vector<size_t> matching_indices;
+
+			for (size_t i = 0; i < resource_routes.size(); ++i) {
+				ResourceSourceRoute const& route = resource_routes[i];
+				if (route.shared_capacity_id == shared.get_capacity_id()) {
+					requests.push_back(SharedTransportRequest {
+						.flow_id = route.source_id,
+						.requested = access[i].delivery_capacity
+					});
+					matching_indices.push_back(i);
+				}
+			}
+
+			auto const allocations = shared.allocate(requests);
+
+			for (size_t i = 0; i < allocations.size(); ++i) {
+				size_t const route_index = matching_indices[i];
+				access[route_index].delivery_capacity = std::min(
+					access[route_index].delivery_capacity,
+					allocations[i].allocated
+				);
+			}
+		}
+
 		return access;
 	}
 
@@ -110,6 +144,7 @@ private:
 				: fixed_point_t::_1;
 		status.source_buffer_inventory = source_network.buffer_inventory();
 		status.source_count = source_network.source_count();
+
 		GoodInstance& market =
 			good_instance_manager.get_good_instance_by_definition(intermediate_good);
 
@@ -211,6 +246,7 @@ public:
 		refresh_status_from_market();
 		return true;
 	}
+
 	[[nodiscard]] bool configure_resource_source_routes(
 		std::vector<ResourceSourceRoute> routes
 	) {
@@ -234,6 +270,19 @@ public:
 			}
 		}
 		return false;
+	}
+
+	[[nodiscard]] bool configure_shared_transport_capacities(
+		std::vector<SharedTransportCapacity> capacities
+	) {
+		for (SharedTransportCapacity const& capacity : capacities) {
+			if (!capacity.is_valid()) {
+				return false;
+			}
+		}
+
+		shared_transport_capacities = std::move(capacities);
+		return true;
 	}
 
 	void pre_market_daily_tick() {

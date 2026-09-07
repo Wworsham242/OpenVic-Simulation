@@ -175,6 +175,14 @@ namespace OpenVic {
 					access_allowed
 				);
 		}
+		[[nodiscard]] bool configure_live_shared_transport_capacities(
+			std::vector<SharedTransportCapacity> capacities
+		) {
+			return live_economy_runtime != nullptr
+				&& live_economy_runtime->configure_shared_transport_capacities(
+					std::move(capacities)
+				);
+		}
 		/// Register one generalized actor authority profile.
 		[[nodiscard]] bool register_actor_authority(ActorAuthorityProfile profile) {
 			return authority_registry.register_profile(std::move(profile));
