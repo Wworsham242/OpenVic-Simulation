@@ -50,8 +50,6 @@ namespace OpenVic {
 		void hire();
 		fixed_point_t produce();
 		void pay_employees(memory::vector<fixed_point_t>& reusable_vector);
-		void prepare_employment_cycle();
-		void production_cycle(memory::vector<fixed_point_t>& reusable_vector);
 		static void after_sell(void* actor, SellResult const& sell_result, memory::vector<fixed_point_t>& reusable_vector);
 
 	public:
@@ -74,5 +72,15 @@ namespace OpenVic {
 		void initialise_rgo_size_multiplier();
 		static constexpr size_t VECTORS_FOR_RGO_TICK = 1;
 		void rgo_tick(memory::vector<fixed_point_t>& reusable_vector);
+// B3: employment allocation authority may now sit outside the RGO.
+// These methods expose demand/eligibility/assignment while retaining
+// RGO-owned Employee records, payroll caches and production mechanics.
+void prepare_employment_cycle();
+
+[[nodiscard]] fixed_point_t get_remaining_workforce_demand() const;
+[[nodiscard]] bool accepts_worker(Pop const& pop) const;
+[[nodiscard]] pop_size_t assign_worker(Pop& pop, pop_size_t requested_count);
+
+void production_cycle(memory::vector<fixed_point_t>& reusable_vector);
 	};
 }

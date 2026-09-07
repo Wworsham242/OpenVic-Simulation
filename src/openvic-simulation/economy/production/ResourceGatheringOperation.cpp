@@ -161,6 +161,84 @@ owner_pops_cache_nullable =
 }
 }
 
+fixed_point_t ResourceGatheringOperation::get_remaining_workforce_demand() const {
+if (production_type_nullable == nullptr || max_employee_count_cache <= 0) {
+return fixed_point_t::_0;
+}
+
+if (total_employees_count_cache >= max_employee_count_cache) {
+return fixed_point_t::_0;
+}
+
+return fixed_point_t {
+type_safe::get(max_employee_count_cache - total_employees_count_cache)
+};
+}
+
+bool ResourceGatheringOperation::accepts_worker(Pop const& pop) const {
+if (production_type_nullable == nullptr) {
+return false;
+}
+
+const pop_type_index_t pop_type_index = pop.get_type().index;
+
+for (Job const& job : production_type_nullable->get_jobs()) {
+if (job.pop_type_index == pop_type_index) {
+return true;
+}
+}
+
+return false;
+}
+
+pop_size_t ResourceGatheringOperation::assign_worker(
+Pop& pop,
+pop_size_t requested_count
+) {
+if (
+requested_count <= 0 ||
+!accepts_worker(pop) ||
+pop.get_unemployed() <= 0
+) {
+return pop_size_t { 0 };
+}
+
+const fixed_point_t remaining_demand =
+get_remaining_workforce_demand();
+
+if (remaining_demand < fixed_point_t::_1) {
+return pop_size_t { 0 };
+}
+
+const fixed_point_t bounded_count = std::min(
+fixed_point_t { type_safe::get(requested_count) },
+std::min(
+remaining_demand,
+fixed_point_t { type_safe::get(pop.get_unemployed()) }
+)
+);
+
+const pop_size_t count =
+bounded_count.floor<type_safe::underlying_type<pop_size_t>>();
+
+if (count <= 0) {
+return pop_size_t { 0 };
+}
+
+PopType const& pop_type = pop.get_type();
+
+employee_count_per_type_cache[pop_type.index] += count;
+employees.emplace_back(pop, count);
+pop.hire(count);
+
+total_employees_count_cache += count;
+
+if (!pop_type.is_slave) {
+total_paid_employees_count_cache += count;
+}
+
+return count;
+}
 void ResourceGatheringOperation::production_cycle(
 memory::vector<fixed_point_t>& reusable_vector
 ) {
@@ -258,14 +336,8 @@ void ResourceGatheringOperation::hire() {
 					continue;
 				}
 
-				employee_count_per_type_cache[pop_type.index] += pop_size_to_hire;
-				employees.emplace_back(pop, pop_size_to_hire);
-				pop.hire(pop_size_to_hire);
-				total_employees_count_cache += pop_size_to_hire;
-				if (!pop_type.is_slave) {
-					total_paid_employees_count_cache += pop_size_to_hire;
-				}
-				break;
+				(void)assign_worker(pop, pop_size_to_hire);
+break;
 			}
 		}
 	}
