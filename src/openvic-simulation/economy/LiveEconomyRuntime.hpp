@@ -39,6 +39,33 @@ struct ResourceSourceRoute final {
 		shared_capacity_id { std::move(new_shared_capacity_id) } {}
 };
 
+struct ResourceAlternativeRoute final {
+	std::string source_id;
+	std::string route_id;
+	TransportCorridor corridor;
+	bool access_allowed = true;
+	fixed_point_t accessible_fraction = fixed_point_t::_1;
+
+	ResourceAlternativeRoute(
+		std::string new_source_id,
+		std::string new_route_id,
+		TransportCorridor new_corridor,
+		bool new_access_allowed = true,
+		fixed_point_t new_accessible_fraction = fixed_point_t::_1
+	) : source_id { std::move(new_source_id) },
+		route_id { std::move(new_route_id) },
+		corridor { std::move(new_corridor) },
+		access_allowed { new_access_allowed },
+		accessible_fraction { new_accessible_fraction } {}
+
+	[[nodiscard]] fixed_point_t effective_capacity() const {
+		if (!access_allowed) {
+			return fixed_point_t::_0;
+		}
+		return corridor.calculate_bottleneck_capacity() * accessible_fraction;
+	}
+};
+
 struct LiveEconomyStatus final {
 	bool configured = false;
 	uint64_t completed_daily_ticks = 0;
@@ -77,6 +104,7 @@ private:
 
 	ResourceSupplyNetwork source_network;
 	std::vector<ResourceSourceRoute> resource_routes;
+	std::vector<ResourceAlternativeRoute> alternative_resource_routes;
 	std::vector<SharedTransportCapacity> shared_transport_capacities;
 
 	GoodDefinition const& intermediate_good;
@@ -129,6 +157,21 @@ private:
 					access[route_index].delivery_capacity,
 					allocations[i].allocated
 				);
+			}
+		}
+
+		// Add usable alternate-route capacity after primary/shared constraints.
+		for (ResourceAlternativeRoute const& alternate : alternative_resource_routes) {
+			if (!alternate.access_allowed) {
+				continue;
+			}
+
+			for (ResourceSourceAccess& source_access : access) {
+				if (source_access.source_id == alternate.source_id) {
+					source_access.delivery_capacity += alternate.effective_capacity();
+					source_access.access_allowed = true;
+					break;
+				}
 			}
 		}
 
@@ -283,6 +326,32 @@ public:
 
 		shared_transport_capacities = std::move(capacities);
 		return true;
+	}
+
+	[[nodiscard]] bool configure_resource_alternative_routes(
+		std::vector<ResourceAlternativeRoute> routes
+	) {
+		for (ResourceAlternativeRoute const& route : routes) {
+			if (route.source_id.empty() || route.route_id.empty()) {
+				return false;
+			}
+		}
+
+		alternative_resource_routes = std::move(routes);
+		return true;
+	}
+
+	[[nodiscard]] bool set_resource_alternative_route_access(
+		std::string_view route_id,
+		bool access_allowed
+	) {
+		for (ResourceAlternativeRoute& route : alternative_resource_routes) {
+			if (route.route_id == route_id) {
+				route.access_allowed = access_allowed;
+				return true;
+			}
+		}
+		return false;
 	}
 
 	void pre_market_daily_tick() {
