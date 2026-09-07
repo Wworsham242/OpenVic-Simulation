@@ -1,0 +1,14 @@
+upstream_process = native_ore_to_steel
+downstream_process = native_steel_to_machinery
+
+upstream_capacity = 4
+upstream_utilization = 1
+downstream_capacity = 4
+downstream_utilization = 1
+
+source_inflow_good = native_iron_ore
+source_inflow_per_daily_tick = 4
+
+source_node = 11
+destination_node = 22
+corridor_capacities = { 4 }

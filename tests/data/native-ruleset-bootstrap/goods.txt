@@ -1,0 +1,14 @@
+native_industry = {
+	native_iron_ore = {
+		color = { 90 85 80 }
+		cost = 8
+	}
+	native_primary_steel = {
+		color = { 125 135 145 }
+		cost = 24
+	}
+	native_industrial_machinery = {
+		color = { 70 100 130 }
+		cost = 60
+	}
+}

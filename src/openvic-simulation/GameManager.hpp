@@ -66,6 +66,11 @@ namespace OpenVic {
 		bool load_mods(memory::vector<memory::string> const& mods_to_find);
 
 		bool load_definitions(Dataloader::localisation_callback_t localisation_callback);
+
+		/// Load a minimal application-owned economy package for native
+		/// convergence bootstrap. This path requires no Victoria data root and
+		/// creates no second simulation authority.
+		bool load_native_economy_bootstrap(fs::path const& root);
 		/// Construct and initialise the authoritative runtime without loading a
 		/// legacy bookmark. Native scenario/bootstrap state is applied through
 		/// generalized runtime owners after this boundary.

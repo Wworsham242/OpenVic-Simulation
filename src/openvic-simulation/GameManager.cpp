@@ -191,6 +191,58 @@ bool GameManager::load_definitions(Dataloader::localisation_callback_t localisat
 	return ret;
 }
 
+bool GameManager::load_native_economy_bootstrap(fs::path const& root) {
+	if (instance_manager) {
+		spdlog::error_s("Cannot load native economy bootstrap after runtime construction.");
+		return false;
+	}
+	if (root.empty() || !fs::is_directory(root)) {
+		spdlog::error_s("Invalid native economy bootstrap root: {}", root.string());
+		return false;
+	}
+
+	fs::path const goods_file = root / "goods.txt";
+	fs::path const production_file = root / "production_types.txt";
+	fs::path const scenario_file = root / "live_economy.txt";
+
+	if (
+		!fs::is_regular_file(goods_file) ||
+		!fs::is_regular_file(production_file) ||
+		!fs::is_regular_file(scenario_file)
+	) {
+		spdlog::error_s(
+			"Native economy bootstrap requires goods.txt, production_types.txt and live_economy.txt under {}",
+			root.string()
+		);
+		return false;
+	}
+
+	EconomyManager& economy = definition_manager.get_economy_manager();
+
+	auto goods_parser = Dataloader::parse_defines(goods_file);
+	if (!economy.load_modern_goods_catalog_file(goods_parser.get_file_node())) {
+		spdlog::error_s("Failed to load native goods catalog: {}", goods_file.string());
+		return false;
+	}
+
+	auto production_parser = Dataloader::parse_defines(production_file);
+	if (!economy.load_modern_production_catalog_file(
+		game_rules_manager,
+		definition_manager.get_pop_manager(),
+		production_parser.get_file_node()
+	)) {
+		spdlog::error_s("Failed to load native production catalog: {}", production_file.string());
+		return false;
+	}
+
+	auto scenario_parser = Dataloader::parse_defines(scenario_file);
+	if (!economy.load_live_economy_scenario_file(scenario_parser.get_file_node())) {
+		spdlog::error_s("Failed to load native live-economy scenario: {}", scenario_file.string());
+		return false;
+	}
+
+	return true;
+}
 void GameManager::finalize_instance_definition_registries() {
 	auto& good_definition_manager =
 		definition_manager.get_economy_manager().get_good_definition_manager();

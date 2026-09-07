@@ -1,0 +1,17 @@
+native_ore_to_steel = {
+	workforce = 1
+	input_goods = {
+		native_iron_ore = 1
+	}
+	output_good = native_primary_steel
+	value = 1
+}
+
+native_steel_to_machinery = {
+	workforce = 1
+	input_goods = {
+		native_primary_steel = 2
+	}
+	output_good = native_industrial_machinery
+	value = 1
+}
