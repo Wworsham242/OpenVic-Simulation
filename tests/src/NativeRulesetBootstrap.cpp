@@ -971,3 +971,49 @@ TEST_CASE(
 	);
 	CHECK(steel_process->base_output_quantity == fixed_point_t(1));
 }
+TEST_CASE(
+	"Native facility catalog reuses OpenVic BuildingType capacity machinery",
+	"[convergence][native-ruleset][facility-capacity]"
+) {
+	GameManager manager {
+		[]() {},
+		[]() -> uint64_t { return 0; },
+		[]() -> uint64_t { return 0; }
+	};
+
+	std::filesystem::path const data_root =
+		std::filesystem::path { __FILE__ }.parent_path().parent_path()
+		/ "data" / "native-ruleset-bootstrap";
+
+	REQUIRE(manager.load_native_economy_bootstrap(data_root));
+
+	EconomyManager const& economy =
+		manager.get_definition_manager().get_economy_manager();
+
+	BuildingType const* const facility =
+		economy.get_building_type_manager()
+			.get_building_type_by_identifier("native_primary_steel_capacity");
+
+	REQUIRE(facility != nullptr);
+	CHECK(facility->is_setting_general_capacity_asset());
+	CHECK(facility->capacity_per_level == fixed_point_t(10));
+	CHECK(facility->max_level == building_level_t(5));
+	REQUIRE(facility->production_type != nullptr);
+	CHECK(facility->production_type->is_setting_general_process());
+	CHECK(
+		facility->production_type->get_identifier()
+		== "native_ore_to_steel"
+	);
+	CHECK(facility->goods_cost.size() == 2);
+	CHECK(
+		facility->calculate_installed_capacity(building_level_t(3))
+		== fixed_point_t(30)
+	);
+
+	BuildingInstance instance { *facility, building_level_t(2) };
+	CHECK(instance.get_level() == building_level_t(2));
+	CHECK(
+		facility->calculate_installed_capacity(instance.get_level())
+		== fixed_point_t(20)
+	);
+}

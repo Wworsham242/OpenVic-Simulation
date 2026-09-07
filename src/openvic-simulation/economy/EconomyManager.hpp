@@ -56,6 +56,64 @@ namespace OpenVic {
 				? &*live_economy_scenario_definition
 				: nullptr;
 		}
+
+		/* Setting-general capacity assets reuse inherited BuildingType rather
+		 * than creating a parallel facility system. */
+		bool load_modern_facility_catalog_file(ast::NodeCPtr root) {
+			using namespace NodeTools;
+
+			return expect_dictionary(
+				[this](std::string_view facility_identifier, ast::NodeCPtr facility_node) -> bool {
+					std::string_view process_identifier;
+					building_level_t max_level { 0 };
+					fixed_point_t capacity_per_level = 0;
+					fixed_point_map_t<GoodDefinition const*> goods_cost;
+					Timespan build_time {};
+
+					bool ret = expect_dictionary_keys(
+						"production_process", ZERO_OR_ONE,
+							expect_identifier(assign_variable_callback(process_identifier)),
+						"max_level", ONE_EXACTLY,
+							expect_strong_typedef<building_level_t>(assign_variable_callback(max_level)),
+						"capacity_per_level", ONE_EXACTLY,
+							expect_fixed_point(assign_variable_callback(capacity_per_level)),
+						"goods_cost", ONE_EXACTLY,
+							good_definition_manager.expect_good_definition_decimal_map(
+								move_variable_callback(goods_cost)
+							),
+						"time", ONE_EXACTLY,
+							expect_days(assign_variable_callback(build_time))
+					)(facility_node);
+
+					if (!ret || max_level <= building_level_t { 0 } || capacity_per_level <= fixed_point_t::_0) {
+						return false;
+					}
+
+					ProductionType const* process = nullptr;
+					if (!process_identifier.empty()) {
+						process = production_type_manager.get_production_type_by_identifier(process_identifier);
+						if (process == nullptr || !process->is_setting_general_process()) {
+							return false;
+						}
+					}
+
+					BuildingType::building_type_args_t args {};
+					args.type = "facility";
+					args.max_level = max_level;
+					args.capacity_per_level = capacity_per_level;
+					args.goods_cost = std::move(goods_cost);
+					args.build_time = build_time;
+					args.production_type = process;
+					args.default_enabled = true;
+					args.in_province = false;
+
+					return building_type_manager.add_building_type(
+						facility_identifier,
+						args
+					);
+				}
+			)(root);
+		}
 		bool load_live_economy_scenario_file(ast::NodeCPtr root) {
 			using namespace NodeTools;
 

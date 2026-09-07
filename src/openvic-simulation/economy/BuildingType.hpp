@@ -37,7 +37,7 @@ namespace OpenVic {
 		struct building_type_args_t {
 			std::string_view type, on_completion;
 			ModifierValue modifier;
-			fixed_point_t completion_size = 0, cost = 0, colonial_range = 0, infrastructure = 0;
+			fixed_point_t completion_size = 0, cost = 0, colonial_range = 0, infrastructure = 0, capacity_per_level = 0;
 			building_level_t max_level = building_level_t { 0 }, fort_level = building_level_t { 0 };
 			fixed_point_map_t<GoodDefinition const*> goods_cost;
 			Timespan build_time;
@@ -92,6 +92,20 @@ namespace OpenVic {
 		const naval_capacity_t naval_capacity;
 		const fixed_point_t colonial_range;
 		const fixed_point_t infrastructure;
+
+		// Setting-general capacity represented by each building/facility level.
+		// Legacy Victoria buildings default to zero and retain old semantics.
+		const fixed_point_t capacity_per_level;
+
+		[[nodiscard]] constexpr fixed_point_t calculate_installed_capacity(
+			building_level_t level
+		) const {
+			return capacity_per_level * type_safe::get(level);
+		}
+
+		[[nodiscard]] constexpr bool is_setting_general_capacity_asset() const {
+			return capacity_per_level > fixed_point_t::_0;
+		}
 
 		BuildingType(
 			index_t new_index,

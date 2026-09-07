@@ -203,6 +203,7 @@ bool GameManager::load_native_economy_bootstrap(fs::path const& root) {
 
 	fs::path const goods_file = root / "goods.txt";
 	fs::path const production_file = root / "production_types.txt";
+	fs::path const facilities_file = root / "facilities.txt";
 	fs::path const scenario_file = root / "live_economy.txt";
 
 	if (
@@ -233,6 +234,14 @@ bool GameManager::load_native_economy_bootstrap(fs::path const& root) {
 	)) {
 		spdlog::error_s("Failed to load native production catalog: {}", production_file.string());
 		return false;
+	}
+
+	if (fs::is_regular_file(facilities_file)) {
+		auto facilities_parser = Dataloader::parse_defines(facilities_file);
+		if (!economy.load_modern_facility_catalog_file(facilities_parser.get_file_node())) {
+			spdlog::error_s("Failed to load native facility catalog: {}", facilities_file.string());
+			return false;
+		}
 	}
 
 	auto scenario_parser = Dataloader::parse_defines(scenario_file);

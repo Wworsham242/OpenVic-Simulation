@@ -1,0 +1,10 @@
+native_primary_steel_capacity = {
+	production_process = native_ore_to_steel
+	max_level = 5
+	capacity_per_level = 10
+	goods_cost = {
+		native_industrial_machinery = 2
+		native_primary_steel = 4
+	}
+	time = 180
+}

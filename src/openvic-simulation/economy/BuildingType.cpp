@@ -52,6 +52,7 @@ BuildingType::BuildingType(
 	is_limited_to_one_per_state { building_type_args.one_per_state },
 	colonial_range { building_type_args.colonial_range },
 	infrastructure { building_type_args.infrastructure },
+	capacity_per_level { building_type_args.capacity_per_level },
 	should_spawn_railway_track { building_type_args.spawn_railway_track },
 	is_sail { building_type_args.sail },
 	is_steam { building_type_args.steam },
