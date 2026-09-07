@@ -50,6 +50,8 @@ namespace OpenVic {
 		void hire();
 		fixed_point_t produce();
 		void pay_employees(memory::vector<fixed_point_t>& reusable_vector);
+		void prepare_employment_cycle();
+		void production_cycle(memory::vector<fixed_point_t>& reusable_vector);
 		static void after_sell(void* actor, SellResult const& sell_result, memory::vector<fixed_point_t>& reusable_vector);
 
 	public:

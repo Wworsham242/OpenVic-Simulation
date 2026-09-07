@@ -126,55 +126,97 @@ fixed_point_t ResourceGatheringOperation::calculate_size_modifier() const {
 	return size_modifier > 0 ? size_modifier : fixed_point_t::_0;
 }
 
-void ResourceGatheringOperation::rgo_tick(memory::vector<fixed_point_t>& reusable_vector) {
-	ProvinceInstance& location = *location_ptr;
-	if (production_type_nullable == nullptr || location.get_owner() == nullptr) {
-		output_quantity_yesterday = 0;
-		revenue_yesterday = 0;
-		return;
-	}
+void ResourceGatheringOperation::prepare_employment_cycle() {
+ProvinceInstance& location = *location_ptr;
 
-	ProductionType const& production_type = *production_type_nullable;
-	std::span<const Job> jobs = production_type.get_jobs();
+total_worker_count_in_province_cache = 0;
+total_owner_count_in_state_cache = 0;
+owner_pops_cache_nullable = nullptr;
 
-	total_worker_count_in_province_cache = 0; //not counting equivalents
-	for (Job const& job : jobs) {
-		total_worker_count_in_province_cache += location.get_population_by_type()[job.pop_type_index];
-	}
+total_employees_count_cache = 0;
+total_paid_employees_count_cache = 0;
+employees.clear();
+std::fill(employee_count_per_type_cache.begin(), employee_count_per_type_cache.end(), 0);
 
-	hire();
-
-	total_owner_count_in_state_cache = 0;
-	owner_pops_cache_nullable = nullptr;
-
-	if (production_type.owner.has_value()) {
-		const pop_type_index_t owner_pop_type_index = production_type.owner->pop_type_index;
-		total_owner_count_in_state_cache = location.get_state()->get_population_by_type()[owner_pop_type_index];
-		owner_pops_cache_nullable = &location.get_state()->get_pops_cache_by_type()[owner_pop_type_index];
-	}
-
-	output_quantity_yesterday = produce();
-	if (output_quantity_yesterday > 0) {
-		CountryInstance* const country_to_report_economy_nullable = location.get_country_to_report_economy();
-		if (country_to_report_economy_nullable != nullptr) {
-			country_to_report_economy_nullable->report_output(production_type, output_quantity_yesterday);
-		}
-
-		market_instance.place_market_sell_order(
-			{
-				production_type.output_good.index,
-				country_to_report_economy_nullable == nullptr
-					? std::nullopt
-					: std::optional<country_index_t>{country_to_report_economy_nullable->index},
-				output_quantity_yesterday,
-				this,
-				after_sell,
-			},
-			reusable_vector
-		);
-	}
+if (production_type_nullable == nullptr || location.get_owner() == nullptr) {
+return;
 }
 
+ProductionType const& production_type = *production_type_nullable;
+
+for (Job const& job : production_type.get_jobs()) {
+total_worker_count_in_province_cache +=
+location.get_population_by_type()[job.pop_type_index];
+}
+
+if (production_type.owner.has_value()) {
+const pop_type_index_t owner_pop_type_index =
+production_type.owner->pop_type_index;
+
+total_owner_count_in_state_cache =
+location.get_state()->get_population_by_type()[owner_pop_type_index];
+
+owner_pops_cache_nullable =
+&location.get_state()->get_pops_cache_by_type()[owner_pop_type_index];
+}
+}
+
+void ResourceGatheringOperation::production_cycle(
+memory::vector<fixed_point_t>& reusable_vector
+) {
+ProvinceInstance& location = *location_ptr;
+
+if (production_type_nullable == nullptr || location.get_owner() == nullptr) {
+output_quantity_yesterday = 0;
+revenue_yesterday = 0;
+return;
+}
+
+ProductionType const& production_type = *production_type_nullable;
+
+output_quantity_yesterday = produce();
+
+if (output_quantity_yesterday <= 0) {
+return;
+}
+
+CountryInstance* const country_to_report_economy_nullable =
+location.get_country_to_report_economy();
+
+if (country_to_report_economy_nullable != nullptr) {
+country_to_report_economy_nullable->report_output(
+production_type,
+output_quantity_yesterday
+);
+}
+
+market_instance.place_market_sell_order(
+{
+production_type.output_good.index,
+country_to_report_economy_nullable == nullptr
+? std::nullopt
+: std::optional<country_index_t>{
+country_to_report_economy_nullable->index
+},
+output_quantity_yesterday,
+this,
+after_sell,
+},
+reusable_vector
+);
+}
+
+void ResourceGatheringOperation::rgo_tick(
+memory::vector<fixed_point_t>& reusable_vector
+) {
+prepare_employment_cycle();
+
+// Compatibility behavior for B3 phase 1.
+// The next B3 step will move allocation authority outside the RGO.
+hire();
+
+production_cycle(reusable_vector);
+}
 void ResourceGatheringOperation::after_sell(void* actor, SellResult const& sell_result, memory::vector<fixed_point_t>& reusable_vector) {
 	ResourceGatheringOperation& rgo = *static_cast<ResourceGatheringOperation*>(actor);
 	rgo.revenue_yesterday = sell_result.money_gained;
