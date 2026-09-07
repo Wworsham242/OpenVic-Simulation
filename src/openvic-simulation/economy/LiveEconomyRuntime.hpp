@@ -138,6 +138,7 @@ private:
 	std::optional<LiveEconomyCycleProvenance> pending_provenance;
 	std::optional<LiveEconomyCycleProvenance> completed_provenance;
 	std::optional<ProductiveSiteBinding> upstream_site;
+	std::optional<WorkforceAllocationResult> preallocated_upstream_workforce;
 
 	[[nodiscard]] std::vector<ResourceSourceAccess> build_resource_source_access() const {
 		std::vector<ResourceSourceAccess> access;
@@ -330,6 +331,19 @@ public:
 		return true;
 	}
 
+[[nodiscard]] AggregateProducer& get_upstream_producer_for_workforce_allocation() {
+return upstream;
+}
+
+[[nodiscard]] ProductiveSiteBinding const* get_upstream_site_binding() const {
+return upstream_site ? &*upstream_site : nullptr;
+}
+
+void set_preallocated_upstream_workforce(
+WorkforceAllocationResult allocation
+) {
+preallocated_upstream_workforce = allocation;
+}
 	[[nodiscard]] bool bind_upstream_site(ProductiveSiteBinding binding, MapInstance& map) {
 		if (!binding.resolve(map, upstream.get_production_type())) { return false; }
 		upstream_site = std::move(binding);
@@ -522,12 +536,21 @@ public:
 		upstream_bridge.reset_cycle_result();
 		downstream_bridge.reset_cycle_result();
 		if (upstream_pops.has_value()) {
-			WorkforceAllocationResult allocation;
-			(void)allocate_producer_workforce_from_pool(upstream, *upstream_pops, &allocation);
-			if (pending_provenance) {
-				pending_provenance->workforce = allocation;
-			}
-		}
+WorkforceAllocationResult allocation;
+(void)allocate_producer_workforce_from_pool(
+upstream, *upstream_pops, &allocation
+);
+if (pending_provenance) {
+pending_provenance->workforce = allocation;
+}
+preallocated_upstream_workforce.reset();
+} else if (preallocated_upstream_workforce.has_value()) {
+if (pending_provenance) {
+pending_provenance->workforce =
+*preallocated_upstream_workforce;
+}
+preallocated_upstream_workforce.reset();
+}
 		ResourceFlowResult const source_flow =
 			source_network.fulfill(
 				scenario.source_inflow_per_daily_tick,

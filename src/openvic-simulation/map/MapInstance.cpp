@@ -173,27 +173,44 @@ void MapInstance::update_gamestate(InstanceManager const& instance_manager) {
 	state_manager.update_gamestate();
 }
 
-void MapInstance::map_tick() {
-// Phase 1: all provinces complete POP work, employment reset,
-// building ticks and RGO employment preparation.
+void MapInstance::prepare_employment_phase() {
+// All POP employment resets, building ticks and RGO demand preparation
+// complete before any employer receives workers.
 thread_pool.process_province_ticks();
+}
 
-// Phase 2 compatibility: preserve inherited RGO allocation policy,
-// but execute it only after every POP employment reset has completed.
+void MapInstance::allocate_legacy_rgo_workforce() {
 for (ProvinceInstance& province : get_province_instances()) {
 province.rgo.allocate_legacy_workforce();
 }
+}
 
-// Phase 3: RGO production and sell-order publication occur only after
-// employment allocation has completed across the map.
+void MapInstance::allocate_legacy_rgo_workforce_except(
+std::string_view excluded_province_id
+) {
+for (ProvinceInstance& province : get_province_instances()) {
+if (province.get_identifier() == excluded_province_id) {
+continue;
+}
+province.rgo.allocate_legacy_workforce();
+}
+}
+
+void MapInstance::finish_rgo_production() {
 memory::vector<fixed_point_t> reusable_vector;
+
 for (ProvinceInstance& province : get_province_instances()) {
 province.rgo.production_cycle(reusable_vector);
 reusable_vector.clear();
 }
+}
 
-// Future state/industrial employers belong in Phase 2 rather than
-// implicitly receiving whatever RGO execution happened to leave behind.
+void MapInstance::map_tick() {
+// Compatibility path for callers that do not participate in the
+// unified employer-allocation phase.
+prepare_employment_phase();
+allocate_legacy_rgo_workforce();
+finish_rgo_production();
 }
 void MapInstance::initialise_for_new_game(InstanceManager const& instance_manager) {
 	update_gamestate(instance_manager);

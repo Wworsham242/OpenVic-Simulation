@@ -199,24 +199,122 @@ void InstanceManager::tick() {
 
 	// Tick...
 	country_instance_manager.country_manager_tick_before_map();
-	map_instance.map_tick();
 
-	// A single clearing operation is shared by cadence-driven live economies and
-	// the legacy-only fallback. Never clear again outside this dispatch.
-	auto clear_market = [this]() { market_instance.execute_orders(); };
-	if (live_economy_runtime != nullptr) {
-		live_economy_runtime->run_due_daily_cycles(
-			previous_time, simulation_timeline.current_time(),
-			[this](SimTime) -> std::optional<WorkforcePool> {
-				// map_tick has completed POP reset and existing RGO employment.
-				return live_economy_runtime->prepare_upstream_site(map_instance);
-			},
-			clear_market
-		);
-	} else {
-		clear_market();
-	}
-	country_instance_manager.country_manager_tick_after_map();
+// B3 phase 1: all POP employment resets and RGO demand preparation
+// finish before any employer receives workers.
+map_instance.prepare_employment_phase();
+
+// One authoritative market clear remains shared by legacy and modern orders.
+auto clear_market = [this]() { market_instance.execute_orders(); };
+
+if (live_economy_runtime != nullptr) {
+live_economy_runtime->run_due_daily_cycles(
+previous_time,
+simulation_timeline.current_time(),
+[this](SimTime) -> std::optional<WorkforcePool> {
+auto workforce =
+live_economy_runtime->prepare_upstream_site(map_instance);
+
+ProductiveSiteBinding const* binding =
+live_economy_runtime->get_upstream_site_binding();
+
+if (!workforce.has_value() || binding == nullptr) {
+map_instance.allocate_legacy_rgo_workforce();
+map_instance.finish_rgo_production();
+return std::nullopt;
+}
+
+ProvinceInstance* province =
+map_instance.get_province_instance_by_identifier(
+binding->province_id
+);
+
+if (province == nullptr) {
+map_instance.allocate_legacy_rgo_workforce();
+map_instance.finish_rgo_production();
+return std::nullopt;
+}
+
+// Non-contested provinces keep inherited RGO allocation.
+map_instance.allocate_legacy_rgo_workforce_except(
+binding->province_id
+);
+
+AggregateProducer& producer =
+live_economy_runtime
+->get_upstream_producer_for_workforce_allocation();
+
+std::string const rgo_employer_id =
+"rgo:" + binding->province_id;
+
+std::string const producer_employer_id =
+"site:" + binding->province_id + ":" +
+binding->building_id;
+
+WorkforceEmployerRequest rgo_request =
+make_rgo_workforce_request(
+province->get_mutable_rgo(),
+rgo_employer_id,
+1
+);
+
+WorkforceEmployerRequest producer_request =
+make_producer_workforce_request(
+producer,
+producer_employer_id,
+1
+);
+
+fixed_point_t const producer_requested =
+producer_request.requested;
+
+auto allocations = allocate_competing_employers(
+{
+rgo_request,
+producer_request
+},
+*workforce
+);
+
+fixed_point_t producer_allocated = fixed_point_t::_0;
+
+for (
+WorkforceEmployerAllocation const& allocation :
+allocations
+) {
+if (
+allocation.employer_id ==
+producer_employer_id
+) {
+producer_allocated = allocation.allocated;
+break;
+}
+}
+
+live_economy_runtime
+->set_preallocated_upstream_workforce(
+WorkforceAllocationResult {
+.requested = producer_requested,
+.allocated = producer_allocated
+}
+);
+
+// RGO output now consumes the assignment produced by the
+// same labor authority as the modern productive site.
+map_instance.finish_rgo_production();
+
+// No POP pool is returned because the modern producer has
+// already received its authoritative assignment.
+return std::nullopt;
+},
+clear_market
+);
+} else {
+map_instance.allocate_legacy_rgo_workforce();
+map_instance.finish_rgo_production();
+clear_market();
+}
+country_instance_manager.country_manager_tick_after_map();
 	unit_instance_manager.tick();
 
 	if (today.is_month_start()) {

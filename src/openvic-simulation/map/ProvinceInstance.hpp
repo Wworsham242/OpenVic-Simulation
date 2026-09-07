@@ -148,6 +148,9 @@ namespace OpenVic {
 
 		void set_state(State* new_state);
 
+ResourceGatheringOperation& get_mutable_rgo() {
+return rgo;
+}
 		GoodDefinition const* get_rgo_good() const;
 		bool set_rgo_production_type_nullable(
 			TypedSpan<pop_type_index_t, const PopType> pop_types,
@@ -239,7 +242,7 @@ namespace OpenVic {
 		bool apply_history_to_province(ProvinceHistoryEntry const& entry, CountryInstanceManager& country_manager);
 
 		void setup_pop_test_values(TypedSpan<reform_index_t, const Reform> reforms);
-		memory::colony<Pop>& get_mutable_pops();
+memory::colony<Pop>& get_mutable_pops();
 	private:
 		template<typename T>
 		static std::conditional_t<std::is_const_v<T>, Pop const*, Pop*> _find_pop_by_id(T& self, const pop_id_in_province_t pop_id);
