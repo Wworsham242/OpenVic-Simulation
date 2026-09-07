@@ -6,6 +6,7 @@
 #include <utility>
 #include <vector>
 
+#include "openvic-simulation/economy/BuildingType.hpp"
 #include "openvic-simulation/economy/GoodInstance.hpp"
 #include "openvic-simulation/economy/LiveEconomyScenario.hpp"
 #include "openvic-simulation/economy/production/AggregateProducer.hpp"
@@ -303,6 +304,28 @@ public:
 
 	[[nodiscard]] bool set_source_resource_availability(fixed_point_t availability_fraction) {
 		return set_resource_source_availability("scenario_source", availability_fraction);
+	}
+
+	/// Bind the upstream producer's authoritative capacity to an inherited
+	/// OpenVic facility/capacity asset at a specific installed level.
+	[[nodiscard]] bool set_upstream_capacity_from_facility(
+		BuildingType const& facility,
+		building_level_t installed_level
+	) {
+		if (
+			!facility.is_setting_general_capacity_asset() ||
+			facility.production_type == nullptr ||
+			facility.production_type != &upstream.get_production_type() ||
+			installed_level < building_level_t { 0 } ||
+			installed_level > facility.max_level
+		) {
+			return false;
+		}
+
+		upstream.set_capacity(
+			facility.calculate_installed_capacity(installed_level)
+		);
+		return true;
 	}
 
 	[[nodiscard]] bool configure_resource_supply_network(

@@ -135,6 +135,17 @@ namespace OpenVic {
 				&& live_economy_runtime->set_source_resource_availability(availability_fraction);
 		}
 
+		[[nodiscard]] bool set_live_upstream_capacity_from_facility(
+			BuildingType const& facility,
+			building_level_t installed_level
+		) {
+			return live_economy_runtime != nullptr
+				&& live_economy_runtime->set_upstream_capacity_from_facility(
+					facility,
+					installed_level
+				);
+		}
+
 		[[nodiscard]] bool configure_live_resource_supply_network(
 			std::vector<ResourceSourceState> sources,
 			ResourceBufferState buffer

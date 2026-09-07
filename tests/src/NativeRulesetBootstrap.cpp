@@ -996,7 +996,7 @@ TEST_CASE(
 
 	REQUIRE(facility != nullptr);
 	CHECK(facility->is_setting_general_capacity_asset());
-	CHECK(facility->capacity_per_level == fixed_point_t(10));
+	CHECK(facility->capacity_per_level == fixed_point_t(2));
 	CHECK(facility->max_level == building_level_t(5));
 	REQUIRE(facility->production_type != nullptr);
 	CHECK(facility->production_type->is_setting_general_process());
@@ -1007,13 +1007,72 @@ TEST_CASE(
 	CHECK(facility->goods_cost.size() == 2);
 	CHECK(
 		facility->calculate_installed_capacity(building_level_t(3))
-		== fixed_point_t(30)
+		== fixed_point_t(6)
 	);
 
 	BuildingInstance instance { *facility, building_level_t(2) };
 	CHECK(instance.get_level() == building_level_t(2));
 	CHECK(
 		facility->calculate_installed_capacity(instance.get_level())
-		== fixed_point_t(20)
+		== fixed_point_t(4)
 	);
+}
+TEST_CASE(
+	"Installed facility level causally constrains live production",
+	"[convergence][native-ruleset][facility-production-capacity]"
+) {
+	GameManager manager {
+		[]() {},
+		[]() -> uint64_t { return 0; },
+		[]() -> uint64_t { return 0; }
+	};
+
+	std::filesystem::path const data_root =
+		std::filesystem::path { __FILE__ }.parent_path().parent_path()
+		/ "data" / "native-ruleset-bootstrap";
+
+	REQUIRE(manager.load_native_economy_bootstrap(data_root));
+	REQUIRE(manager.setup_native_instance());
+
+	InstanceManager* const instance = manager.get_instance_manager();
+	REQUIRE(instance != nullptr);
+
+	EconomyManager const& economy =
+		manager.get_definition_manager().get_economy_manager();
+
+	BuildingType const* const facility =
+		economy.get_building_type_manager()
+			.get_building_type_by_identifier("native_primary_steel_capacity");
+
+	REQUIRE(facility != nullptr);
+
+	// Level 1 installs only two units of capacity.
+	REQUIRE(
+		instance->set_live_upstream_capacity_from_facility(
+			*facility,
+			building_level_t(1)
+		)
+	);
+
+	REQUIRE(manager.start_game_session());
+	instance->force_tick_and_update();
+
+	LiveEconomyStatus constrained = instance->get_live_economy_status();
+	CHECK(constrained.upstream_output == fixed_point_t(2));
+
+	// Expanding to level 2 installs four units, restoring the live scenario's
+	// full upstream throughput on the following production tick.
+	REQUIRE(
+		instance->set_live_upstream_capacity_from_facility(
+			*facility,
+			building_level_t(2)
+		)
+	);
+
+	instance->force_tick_and_update();
+
+	LiveEconomyStatus expanded = instance->get_live_economy_status();
+	CHECK(expanded.upstream_output == fixed_point_t(4));
+
+	REQUIRE(manager.end_game_session());
 }
