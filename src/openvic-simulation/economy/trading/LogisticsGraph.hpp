@@ -32,7 +32,9 @@ struct LogisticsGraphFlowAllocation final {
 	std::string flow_id;
 	fixed_point_t requested = 0;
 	fixed_point_t allocated = 0;
+	fixed_point_t rerouted_allocated = 0;
 	LogisticsGraphPath path {};
+	LogisticsGraphPath alternate_path {};
 };
 
 /// Small deterministic graph for coarse strategic logistics routing.
@@ -110,9 +112,10 @@ public:
 		return fixed_point_t::_0;
 	}
 
-	[[nodiscard]] LogisticsGraphPath find_route(
+	[[nodiscard]] LogisticsGraphPath find_route_excluding(
 		market_node_index_t source,
-		market_node_index_t destination
+		market_node_index_t destination,
+		std::vector<std::string> const& excluded_edge_ids
 	) const {
 		if (source == destination) {
 			return LogisticsGraphPath {
@@ -152,7 +155,14 @@ public:
 
 			for (Candidate const& candidate : frontier) {
 				for (LogisticsGraphEdge const& edge : edges) {
-					if (edge.source != candidate.node) {
+					if (
+						edge.source != candidate.node ||
+						std::find(
+							excluded_edge_ids.begin(),
+							excluded_edge_ids.end(),
+							edge.edge_id
+						) != excluded_edge_ids.end()
+					) {
 						continue;
 					}
 
@@ -180,6 +190,13 @@ public:
 		}
 
 		return {};
+	}
+
+	[[nodiscard]] LogisticsGraphPath find_route(
+		market_node_index_t source,
+		market_node_index_t destination
+	) const {
+		return find_route_excluding(source, destination, {});
 	}
 
 	/// Allocate multiple independently routed flows across shared graph edges.
@@ -260,6 +277,126 @@ public:
 
 			allocation.allocated =
 				allocation.requested * limiting_fraction;
+		}
+
+		// Residual shortfall may use a second path after primary allocations
+		// consume their shared-edge capacity. Residual rerouting is processed
+		// in deterministic flow-id order.
+		std::vector<std::pair<std::string, fixed_point_t>> remaining_capacity;
+		remaining_capacity.reserve(edges.size());
+
+		for (LogisticsGraphEdge const& edge : edges) {
+			fixed_point_t used = 0;
+
+			for (LogisticsGraphFlowAllocation const& allocation : allocations) {
+				if (
+					allocation.path.found &&
+					std::find(
+						allocation.path.edge_ids.begin(),
+						allocation.path.edge_ids.end(),
+						edge.edge_id
+					) != allocation.path.edge_ids.end()
+				) {
+					used += allocation.allocated;
+				}
+			}
+
+			remaining_capacity.push_back({
+				edge.edge_id,
+				std::max(
+					fixed_point_t::_0,
+					edge.leg.calculate_effective_capacity() - used
+				)
+			});
+		}
+
+		std::vector<size_t> reroute_order;
+		reroute_order.reserve(allocations.size());
+		for (size_t i = 0; i < allocations.size(); ++i) {
+			reroute_order.push_back(i);
+		}
+
+		std::sort(
+			reroute_order.begin(),
+			reroute_order.end(),
+			[&allocations](size_t lhs, size_t rhs) {
+				return allocations[lhs].flow_id < allocations[rhs].flow_id;
+			}
+		);
+
+		for (size_t const index : reroute_order) {
+			LogisticsGraphFlowAllocation& allocation = allocations[index];
+			fixed_point_t const residual =
+				allocation.requested - allocation.allocated;
+
+			if (
+				residual <= fixed_point_t::_0 ||
+				!allocation.path.found
+			) {
+				continue;
+			}
+
+			std::vector<std::string> excluded = allocation.path.edge_ids;
+
+			for (auto const& [edge_id, remaining] : remaining_capacity) {
+				if (
+					remaining <= fixed_point_t::_0 &&
+					std::find(
+						excluded.begin(),
+						excluded.end(),
+						edge_id
+					) == excluded.end()
+				) {
+					excluded.push_back(edge_id);
+				}
+			}
+
+			LogisticsGraphFlowRequest const& request = requests[index];
+			LogisticsGraphPath alternate = find_route_excluding(
+				request.source,
+				request.destination,
+				excluded
+			);
+
+			if (!alternate.found) {
+				continue;
+			}
+
+			fixed_point_t alternate_capacity = residual;
+
+			for (std::string const& edge_id : alternate.edge_ids) {
+				auto const it = std::find_if(
+					remaining_capacity.begin(),
+					remaining_capacity.end(),
+					[&edge_id](auto const& item) {
+						return item.first == edge_id;
+					}
+				);
+
+				alternate_capacity = std::min(
+					alternate_capacity,
+					it != remaining_capacity.end()
+						? it->second
+						: fixed_point_t::_0
+				);
+			}
+
+			if (alternate_capacity <= fixed_point_t::_0) {
+				continue;
+			}
+
+			for (std::string const& edge_id : alternate.edge_ids) {
+				for (auto& item : remaining_capacity) {
+					if (item.first == edge_id) {
+						item.second -= alternate_capacity;
+						break;
+					}
+				}
+			}
+
+			allocation.rerouted_allocated = alternate_capacity;
+			allocation.allocated += alternate_capacity;
+			allocation.alternate_path = std::move(alternate);
 		}
 
 		return allocations;

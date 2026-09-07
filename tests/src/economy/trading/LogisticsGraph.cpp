@@ -133,3 +133,61 @@ TEST_CASE(
 		== fixed_point_t(3)
 	);
 }
+TEST_CASE(
+	"Residual constrained flow reroutes onto spare alternate capacity",
+	"[logistics][graph][residual-rerouting]"
+) {
+	LogisticsGraph graph;
+
+	REQUIRE(graph.configure({
+		LogisticsGraphEdge {
+			.edge_id = "a_primary_1",
+			.source = market_node_index_t { 1 },
+			.destination = market_node_index_t { 2 },
+			.leg = TransportLeg {
+				.nominal_capacity = fixed_point_t(1)
+			}
+		},
+		LogisticsGraphEdge {
+			.edge_id = "a_primary_2",
+			.source = market_node_index_t { 2 },
+			.destination = market_node_index_t { 4 },
+			.leg = TransportLeg {
+				.nominal_capacity = fixed_point_t(1)
+			}
+		},
+		LogisticsGraphEdge {
+			.edge_id = "b_alternate_1",
+			.source = market_node_index_t { 1 },
+			.destination = market_node_index_t { 3 },
+			.leg = TransportLeg {
+				.nominal_capacity = fixed_point_t(1)
+			}
+		},
+		LogisticsGraphEdge {
+			.edge_id = "b_alternate_2",
+			.source = market_node_index_t { 3 },
+			.destination = market_node_index_t { 4 },
+			.leg = TransportLeg {
+				.nominal_capacity = fixed_point_t(1)
+			}
+		}
+	}));
+
+	auto allocations = graph.allocate_flows({
+		LogisticsGraphFlowRequest {
+			.flow_id = "mine_a",
+			.source = market_node_index_t { 1 },
+			.destination = market_node_index_t { 4 },
+			.requested = fixed_point_t(2)
+		}
+	});
+
+	REQUIRE(allocations.size() == 1);
+	CHECK(allocations[0].requested == fixed_point_t(2));
+	CHECK(allocations[0].allocated == fixed_point_t(2));
+	CHECK(allocations[0].rerouted_allocated == fixed_point_t(1));
+	REQUIRE(allocations[0].alternate_path.found);
+	REQUIRE(allocations[0].alternate_path.edge_ids.size() == 2);
+	CHECK(allocations[0].alternate_path.edge_ids[0] == "b_alternate_1");
+}
