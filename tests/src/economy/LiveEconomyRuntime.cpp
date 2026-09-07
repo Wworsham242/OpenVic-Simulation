@@ -375,6 +375,184 @@ TEST_CASE("Native workforce allocation caps hires and respects existing employme
 	CHECK(first.calculate_desired_output() == fixed_point_t::_0);
 }
 
+
+namespace {
+struct TestEmployer {
+fixed_point_t assigned = 0;
+
+static bool accepts(void*, Pop const&) {
+return true;
+}
+
+static pop_size_t assign(void* self, Pop& pop, pop_size_t requested) {
+auto& employer = *static_cast<TestEmployer*>(self);
+
+pop_size_t const available = pop.get_unemployed();
+pop_size_t const actual = std::min(requested, available);
+
+if (actual <= 0) {
+return pop_size_t { 0 };
+}
+
+pop.hire(actual);
+employer.assigned += fixed_point_t { type_safe::get(actual) };
+return actual;
+}
+
+WorkforceEmployerRequest request(
+std::string_view id,
+uint8_t priority,
+int workers
+) {
+return WorkforceEmployerRequest {
+.employer_id = id,
+.priority = priority,
+.requested = fixed_point_t { workers },
+.employer = this,
+.accepts = &TestEmployer::accepts,
+.assign = &TestEmployer::assign
+};
+}
+};
+}
+
+TEST_CASE(
+"Competing employer allocation never double employs POPs",
+"[economy][native-workforce][competition]"
+) {
+LiveEconomyFixture fixture {
+workforce_jobs(),
+pop_size_t { 10 },
+ProductionType::template_type_t::PROCESS
+};
+
+GoodInstanceManager goods { fixture.definitions, fixture.rules };
+WorkforcePopFixture population { fixture.rules, goods };
+
+std::array pops {
+population.make_pop(population.eligible, 100, 1)
+};
+
+TestEmployer first;
+TestEmployer second;
+
+auto result = allocate_competing_employers(
+{
+first.request("first", 2, 80),
+second.request("second", 1, 80)
+},
+WorkforcePool { std::span<Pop> { pops } }
+);
+
+REQUIRE(result.size() == 2);
+
+CHECK(result[0].employer_id == "first");
+CHECK(result[0].requested == fixed_point_t { 80 });
+CHECK(result[0].allocated == fixed_point_t { 80 });
+
+CHECK(result[1].employer_id == "second");
+CHECK(result[1].requested == fixed_point_t { 80 });
+CHECK(result[1].allocated == fixed_point_t { 20 });
+
+CHECK(first.assigned == fixed_point_t { 80 });
+CHECK(second.assigned == fixed_point_t { 20 });
+
+CHECK(first.assigned + second.assigned == fixed_point_t { 100 });
+CHECK(pops[0].get_unemployed() == pop_size_t { 0 });
+}
+
+TEST_CASE(
+"Competing employer priority changes allocation deterministically",
+"[economy][native-workforce][competition][priority]"
+) {
+for (bool const first_has_priority : { true, false }) {
+LiveEconomyFixture fixture {
+workforce_jobs(),
+pop_size_t { 10 },
+ProductionType::template_type_t::PROCESS
+};
+
+GoodInstanceManager goods { fixture.definitions, fixture.rules };
+WorkforcePopFixture population { fixture.rules, goods };
+
+std::array pops {
+population.make_pop(population.eligible, 100, 1)
+};
+
+TestEmployer first;
+TestEmployer second;
+
+auto result = allocate_competing_employers(
+{
+first.request("first", first_has_priority ? 2 : 1, 80),
+second.request("second", first_has_priority ? 1 : 2, 80)
+},
+WorkforcePool { std::span<Pop> { pops } }
+);
+
+REQUIRE(result.size() == 2);
+
+if (first_has_priority) {
+CHECK(first.assigned == fixed_point_t { 80 });
+CHECK(second.assigned == fixed_point_t { 20 });
+} else {
+CHECK(first.assigned == fixed_point_t { 20 });
+CHECK(second.assigned == fixed_point_t { 80 });
+}
+
+CHECK(first.assigned + second.assigned == fixed_point_t { 100 });
+CHECK(pops[0].get_unemployed() == pop_size_t { 0 });
+}
+}
+
+TEST_CASE(
+"Equal-priority competing employers use stable employer identity",
+"[economy][native-workforce][competition][determinism]"
+) {
+for (bool const reverse_input_order : { false, true }) {
+LiveEconomyFixture fixture {
+workforce_jobs(),
+pop_size_t { 10 },
+ProductionType::template_type_t::PROCESS
+};
+
+GoodInstanceManager goods { fixture.definitions, fixture.rules };
+WorkforcePopFixture population { fixture.rules, goods };
+
+std::array pops {
+population.make_pop(population.eligible, 100, 1)
+};
+
+TestEmployer alpha;
+TestEmployer beta;
+
+std::vector<WorkforceEmployerRequest> requests;
+
+if (reverse_input_order) {
+requests.push_back(beta.request("beta", 1, 80));
+requests.push_back(alpha.request("alpha", 1, 80));
+} else {
+requests.push_back(alpha.request("alpha", 1, 80));
+requests.push_back(beta.request("beta", 1, 80));
+}
+
+auto result = allocate_competing_employers(
+std::move(requests),
+WorkforcePool { std::span<Pop> { pops } }
+);
+
+REQUIRE(result.size() == 2);
+
+CHECK(result[0].employer_id == "alpha");
+CHECK(result[1].employer_id == "beta");
+
+CHECK(alpha.assigned == fixed_point_t { 80 });
+CHECK(beta.assigned == fixed_point_t { 20 });
+
+CHECK(alpha.assigned + beta.assigned == fixed_point_t { 100 });
+CHECK(pops[0].get_unemployed() == pop_size_t { 0 });
+}
+}
 namespace {
 	struct CadencedEconomyFixture {
 		LiveEconomyFixture definitions;

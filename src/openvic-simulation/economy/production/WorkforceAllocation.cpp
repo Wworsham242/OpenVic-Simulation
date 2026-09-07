@@ -1,6 +1,7 @@
 #include "WorkforceAllocation.hpp"
 
 #include <algorithm>
+#include <ranges>
 
 #include "openvic-simulation/economy/production/AggregateProducer.hpp"
 #include "openvic-simulation/population/Pop.hpp"
@@ -60,4 +61,108 @@ fixed_point_t OpenVic::allocate_producer_workforce_from_pool(
 		return allocate_workforce(producer, *span, result);
 	}
 	return allocate_workforce(producer, std::get<WorkforceColonyView>(pool).pops, result);
+}
+
+namespace {
+
+template<typename Pops>
+std::vector<WorkforceEmployerAllocation> allocate_competing_employers_impl(
+std::vector<WorkforceEmployerRequest> requests,
+Pops&& pops
+) {
+std::ranges::stable_sort(
+requests,
+[](WorkforceEmployerRequest const& lhs, WorkforceEmployerRequest const& rhs) {
+if (lhs.priority != rhs.priority) {
+return lhs.priority > rhs.priority;
+}
+return lhs.employer_id < rhs.employer_id;
+}
+);
+
+std::vector<WorkforceEmployerAllocation> results;
+results.reserve(requests.size());
+
+for (WorkforceEmployerRequest const& request : requests) {
+WorkforceEmployerAllocation result {
+.employer_id = request.employer_id,
+.requested = std::max(request.requested, fixed_point_t::_0),
+.allocated = fixed_point_t::_0
+};
+
+if (
+result.requested < fixed_point_t::_1 ||
+request.employer == nullptr ||
+request.accepts == nullptr ||
+request.assign == nullptr
+) {
+results.push_back(result);
+continue;
+}
+
+fixed_point_t remaining = result.requested;
+
+for (Pop& pop : pops) {
+if (remaining < fixed_point_t::_1) {
+break;
+}
+
+if (
+pop.get_unemployed() <= 0 ||
+!request.accepts(request.employer, pop)
+) {
+continue;
+}
+
+pop_size_t const available = pop.get_unemployed();
+
+pop_size_t const desired = std::min(
+remaining,
+fixed_point_t { type_safe::get(available) }
+).floor<type_safe::underlying_type<pop_size_t>>();
+
+if (desired <= 0) {
+continue;
+}
+
+pop_size_t const assigned =
+request.assign(request.employer, pop, desired);
+
+if (assigned <= 0) {
+continue;
+}
+
+fixed_point_t const assigned_fp {
+type_safe::get(assigned)
+};
+
+result.allocated += assigned_fp;
+remaining -= assigned_fp;
+}
+
+results.push_back(result);
+}
+
+// Results are returned in deterministic allocation order, which also makes
+// provenance/debugging explicit about which policy won contested workers.
+return results;
+}
+
+}
+
+std::vector<WorkforceEmployerAllocation> OpenVic::allocate_competing_employers(
+std::vector<WorkforceEmployerRequest> requests,
+WorkforcePool const& pool
+) {
+if (auto const* span = std::get_if<std::span<Pop>>(&pool)) {
+return allocate_competing_employers_impl(
+std::move(requests),
+*span
+);
+}
+
+return allocate_competing_employers_impl(
+std::move(requests),
+std::get<WorkforceColonyView>(pool).pops
+);
 }
