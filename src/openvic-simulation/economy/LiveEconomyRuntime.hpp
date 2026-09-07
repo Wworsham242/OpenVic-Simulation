@@ -308,6 +308,16 @@ public:
 
 	/// Bind the upstream producer's authoritative capacity to an inherited
 	/// OpenVic facility/capacity asset at a specific installed level.
+	[[nodiscard]] bool set_upstream_available_workforce(
+		fixed_point_t available_workforce
+	) {
+		if (available_workforce < fixed_point_t::_0) {
+			return false;
+		}
+		upstream.set_available_workforce(available_workforce);
+		return true;
+	}
+
 	[[nodiscard]] bool set_upstream_capacity_from_facility(
 		BuildingType const& facility,
 		building_level_t installed_level

@@ -1,5 +1,5 @@
 native_ore_to_steel = {
-	workforce = 1
+	workforce = 10
 	input_goods = {
 		native_iron_ore = 1
 	}

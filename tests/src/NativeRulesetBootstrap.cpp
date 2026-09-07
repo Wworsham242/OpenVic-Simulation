@@ -1076,3 +1076,59 @@ TEST_CASE(
 
 	REQUIRE(manager.end_game_session());
 }
+TEST_CASE(
+	"Available workforce causally constrains live production",
+	"[convergence][native-ruleset][workforce-production-capacity]"
+) {
+	GameManager manager {
+		[]() {},
+		[]() -> uint64_t { return 0; },
+		[]() -> uint64_t { return 0; }
+	};
+
+	std::filesystem::path const data_root =
+		std::filesystem::path { __FILE__ }.parent_path().parent_path()
+		/ "data" / "native-ruleset-bootstrap";
+
+	REQUIRE(manager.load_native_economy_bootstrap(data_root));
+	REQUIRE(manager.setup_native_instance());
+
+	InstanceManager* const instance = manager.get_instance_manager();
+	REQUIRE(instance != nullptr);
+
+	EconomyManager const& economy =
+		manager.get_definition_manager().get_economy_manager();
+
+	BuildingType const* const facility =
+		economy.get_building_type_manager()
+			.get_building_type_by_identifier("native_primary_steel_capacity");
+
+	REQUIRE(facility != nullptr);
+
+	REQUIRE(
+		instance->set_live_upstream_capacity_from_facility(
+			*facility,
+			building_level_t(2)
+		)
+	);
+
+	// The process requires ten workers per unit of capacity.
+	// Twenty workers can therefore support only two capacity units even
+	// though the installed facility can support four.
+	REQUIRE(instance->set_live_upstream_available_workforce(fixed_point_t(20)));
+
+	REQUIRE(manager.start_game_session());
+	instance->force_tick_and_update();
+
+	LiveEconomyStatus labor_limited = instance->get_live_economy_status();
+	CHECK(labor_limited.upstream_output == fixed_point_t(2));
+
+	// Forty workers support all four installed units.
+	REQUIRE(instance->set_live_upstream_available_workforce(fixed_point_t(40)));
+	instance->force_tick_and_update();
+
+	LiveEconomyStatus fully_staffed = instance->get_live_economy_status();
+	CHECK(fully_staffed.upstream_output == fixed_point_t(4));
+
+	REQUIRE(manager.end_game_session());
+}

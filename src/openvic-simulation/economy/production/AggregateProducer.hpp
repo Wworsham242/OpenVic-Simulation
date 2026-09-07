@@ -23,6 +23,8 @@ private:
 	ProductionType const& production_type;
 	fixed_point_t capacity = 0;
 	fixed_point_t utilization = 0;
+	bool workforce_constraint_enabled = false;
+	fixed_point_t available_workforce = 0;
 	fixed_point_map_t<GoodDefinition const*> inventory;
 
 	[[nodiscard]] static fixed_point_t clamp_nonnegative(fixed_point_t value) {
@@ -51,6 +53,39 @@ public:
 	[[nodiscard]] fixed_point_t get_utilization() const { return utilization; }
 	void set_utilization(fixed_point_t value) { utilization = clamp_unit(value); }
 
+	[[nodiscard]] fixed_point_t get_available_workforce() const {
+		return available_workforce;
+	}
+
+	void set_available_workforce(fixed_point_t value) {
+		available_workforce = clamp_nonnegative(value);
+		workforce_constraint_enabled = true;
+	}
+
+	void clear_available_workforce_constraint() {
+		available_workforce = fixed_point_t::_0;
+		workforce_constraint_enabled = false;
+	}
+
+	[[nodiscard]] bool is_workforce_constrained() const {
+		return workforce_constraint_enabled;
+	}
+
+	[[nodiscard]] fixed_point_t calculate_labor_supported_capacity() const {
+		if (!workforce_constraint_enabled) {
+			return capacity;
+		}
+
+		const fixed_point_t workforce_per_capacity =
+			fixed_point_t { type_safe::get(production_type.base_workforce_size) };
+
+		if (workforce_per_capacity <= fixed_point_t::_0) {
+			return fixed_point_t::_0;
+		}
+
+		return available_workforce / workforce_per_capacity;
+	}
+
 	[[nodiscard]] fixed_point_t get_inventory(GoodDefinition const& good) const {
 		auto const it = inventory.find(&good);
 		return it != inventory.end() ? it->second : fixed_point_t::_0;
@@ -66,7 +101,11 @@ public:
 	}
 
 	[[nodiscard]] fixed_point_t calculate_desired_output() const {
-		return production_type.base_output_quantity * capacity * utilization;
+		const fixed_point_t effective_capacity = std::min(
+			capacity,
+			calculate_labor_supported_capacity()
+		);
+		return production_type.base_output_quantity * effective_capacity * utilization;
 	}
 
 	[[nodiscard]] AggregateProductionResult produce() {
