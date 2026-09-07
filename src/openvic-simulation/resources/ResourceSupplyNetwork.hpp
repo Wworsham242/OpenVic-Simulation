@@ -136,6 +136,21 @@ public:	ResourceSupplyNetwork() = default;
 		}
 		return total;
 	}
+	[[nodiscard]] fixed_point_t source_accessible_supply_per_tick(
+		std::string_view source_id
+	) const {
+		auto const it = std::find_if(
+			sources.begin(),
+			sources.end(),
+			[source_id](ResourceSourceState const& source) {
+				return source.source_id == source_id;
+			}
+		);
+
+		return it != sources.end()
+			? it->supply.accessible_per_tick()
+			: fixed_point_t::_0;
+	}
 	[[nodiscard]] fixed_point_t deliverable_supply_per_tick(
 		std::vector<ResourceSourceAccess> const& access
 	) const {

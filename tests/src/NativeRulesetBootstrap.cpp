@@ -674,3 +674,119 @@ TEST_CASE(
 
 	REQUIRE(manager.end_game_session());
 }
+TEST_CASE(
+	"Graph-routed resource flows compete for overlapping edge capacity",
+	"[convergence][native-ruleset][shared-graph-edge]"
+) {
+	GameManager manager {
+		[]() {},
+		[]() -> uint64_t { return 0; },
+		[]() -> uint64_t { return 0; }
+	};
+
+	std::filesystem::path const data_root =
+		std::filesystem::path { __FILE__ }.parent_path().parent_path()
+		/ "data" / "native-ruleset-bootstrap";
+
+	REQUIRE(manager.load_native_economy_bootstrap(data_root));
+	REQUIRE(manager.setup_native_instance());
+
+	InstanceManager* const instance = manager.get_instance_manager();
+	REQUIRE(instance != nullptr);
+
+	REQUIRE(instance->configure_live_resource_supply_network(
+		std::vector<ResourceSourceState> {
+			ResourceSourceState {
+				.source_id = "mine_a",
+				.node = market_node_index_t { 11 },
+				.supply = ResourceSupplyState {
+					.nominal_per_tick = fixed_point_t(2),
+					.availability_fraction = fixed_point_t::_1
+				}
+			},
+			ResourceSourceState {
+				.source_id = "mine_b",
+				.node = market_node_index_t { 12 },
+				.supply = ResourceSupplyState {
+					.nominal_per_tick = fixed_point_t(2),
+					.availability_fraction = fixed_point_t::_1
+				}
+			}
+		},
+		ResourceBufferState {}
+	));
+
+	TransportCorridor fallback_a {
+		market_node_index_t { 11 },
+		market_node_index_t { 22 }
+	};
+	fallback_a.add_leg(TransportLeg {
+		.nominal_capacity = fixed_point_t(2)
+	});
+
+	TransportCorridor fallback_b {
+		market_node_index_t { 12 },
+		market_node_index_t { 22 }
+	};
+	fallback_b.add_leg(TransportLeg {
+		.nominal_capacity = fixed_point_t(2)
+	});
+
+	REQUIRE(instance->configure_live_resource_source_routes(
+		std::vector<ResourceSourceRoute> {
+			ResourceSourceRoute { "mine_a", std::move(fallback_a) },
+			ResourceSourceRoute { "mine_b", std::move(fallback_b) }
+		}
+	));
+
+	REQUIRE(instance->configure_live_logistics_graph({
+		LogisticsGraphEdge {
+			.edge_id = "mine_a_feeder",
+			.source = market_node_index_t { 11 },
+			.destination = market_node_index_t { 30 },
+			.leg = TransportLeg {
+				.nominal_capacity = fixed_point_t(2)
+			}
+		},
+		LogisticsGraphEdge {
+			.edge_id = "mine_b_feeder",
+			.source = market_node_index_t { 12 },
+			.destination = market_node_index_t { 30 },
+			.leg = TransportLeg {
+				.nominal_capacity = fixed_point_t(2)
+			}
+		},
+		LogisticsGraphEdge {
+			.edge_id = "shared_trunk",
+			.source = market_node_index_t { 30 },
+			.destination = market_node_index_t { 22 },
+			.leg = TransportLeg {
+				.nominal_capacity = fixed_point_t(3)
+			}
+		}
+	}));
+
+	REQUIRE(instance->configure_live_resource_graph_routes({
+		ResourceGraphRoute {
+			.source_id = "mine_a",
+			.source_node = market_node_index_t { 11 },
+			.destination_node = market_node_index_t { 22 }
+		},
+		ResourceGraphRoute {
+			.source_id = "mine_b",
+			.source_node = market_node_index_t { 12 },
+			.destination_node = market_node_index_t { 22 }
+		}
+	}));
+
+	REQUIRE(manager.start_game_session());
+
+	instance->force_tick_and_update();
+	LiveEconomyStatus status = instance->get_live_economy_status();
+
+	CHECK(status.source_nominal_inflow == fixed_point_t(4));
+	CHECK(status.source_unmet_inflow == fixed_point_t(1));
+	CHECK(status.upstream_output == fixed_point_t(3));
+
+	REQUIRE(manager.end_game_session());
+}

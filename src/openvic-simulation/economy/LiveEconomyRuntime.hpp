@@ -184,22 +184,31 @@ private:
 			}
 		}
 
-		// Apply graph-derived routing where explicitly configured. This replaces
-		// manually enumerated route capacity for that source while preserving
-		// old explicit-route behavior for sources not yet migrated to the graph.
-		for (ResourceGraphRoute const& graph_route : resource_graph_routes) {
-			LogisticsGraphPath const path = logistics_graph.find_route(
-				graph_route.source_node,
-				graph_route.destination_node
-			);
+		// Batch graph-routed flows so independently selected routes compete for
+		// every shared graph edge they actually use.
+		std::vector<LogisticsGraphFlowRequest> graph_requests;
+		graph_requests.reserve(resource_graph_routes.size());
 
+		for (ResourceGraphRoute const& graph_route : resource_graph_routes) {
+			graph_requests.push_back(LogisticsGraphFlowRequest {
+				.flow_id = graph_route.source_id,
+				.source = graph_route.source_node,
+				.destination = graph_route.destination_node,
+				.requested =
+					source_network.source_accessible_supply_per_tick(
+						graph_route.source_id
+					)
+			});
+		}
+
+		auto const graph_allocations =
+			logistics_graph.allocate_flows(graph_requests);
+
+		for (LogisticsGraphFlowAllocation const& allocation : graph_allocations) {
 			for (ResourceSourceAccess& source_access : access) {
-				if (source_access.source_id == graph_route.source_id) {
-					source_access.delivery_capacity =
-						path.found
-							? path.bottleneck_capacity
-							: fixed_point_t::_0;
-					source_access.access_allowed = path.found;
+				if (source_access.source_id == allocation.flow_id) {
+					source_access.delivery_capacity = allocation.allocated;
+					source_access.access_allowed = allocation.path.found;
 					break;
 				}
 			}

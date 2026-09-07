@@ -68,3 +68,68 @@ TEST_CASE(
 	REQUIRE(alternate.edge_ids.size() == 2);
 	CHECK(alternate.edge_ids[0] == "b_alternate_1");
 }
+TEST_CASE(
+	"Overlapping graph routes share physical edge capacity",
+	"[logistics][graph][shared-edge]"
+) {
+	LogisticsGraph graph;
+
+	REQUIRE(graph.configure({
+		LogisticsGraphEdge {
+			.edge_id = "mine_a_feeder",
+			.source = market_node_index_t { 11 },
+			.destination = market_node_index_t { 30 },
+			.leg = TransportLeg {
+				.nominal_capacity = fixed_point_t(2)
+			}
+		},
+		LogisticsGraphEdge {
+			.edge_id = "mine_b_feeder",
+			.source = market_node_index_t { 12 },
+			.destination = market_node_index_t { 30 },
+			.leg = TransportLeg {
+				.nominal_capacity = fixed_point_t(2)
+			}
+		},
+		LogisticsGraphEdge {
+			.edge_id = "shared_trunk",
+			.source = market_node_index_t { 30 },
+			.destination = market_node_index_t { 22 },
+			.leg = TransportLeg {
+				.nominal_capacity = fixed_point_t(3)
+			}
+		}
+	}));
+
+	auto allocations = graph.allocate_flows({
+		LogisticsGraphFlowRequest {
+			.flow_id = "mine_a",
+			.source = market_node_index_t { 11 },
+			.destination = market_node_index_t { 22 },
+			.requested = fixed_point_t(2)
+		},
+		LogisticsGraphFlowRequest {
+			.flow_id = "mine_b",
+			.source = market_node_index_t { 12 },
+			.destination = market_node_index_t { 22 },
+			.requested = fixed_point_t(2)
+		}
+	});
+
+	REQUIRE(allocations.size() == 2);
+	REQUIRE(allocations[0].path.found);
+	REQUIRE(allocations[1].path.found);
+
+	CHECK(
+		allocations[0].allocated * fixed_point_t(2)
+		== fixed_point_t(3)
+	);
+	CHECK(
+		allocations[1].allocated * fixed_point_t(2)
+		== fixed_point_t(3)
+	);
+	CHECK(
+		allocations[0].allocated + allocations[1].allocated
+		== fixed_point_t(3)
+	);
+}
