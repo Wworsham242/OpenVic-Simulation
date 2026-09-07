@@ -220,3 +220,99 @@ TEST_CASE(
 
 	REQUIRE(manager.end_game_session());
 }
+TEST_CASE(
+	"Transport disruption isolates intact resource supply and consumes buffer",
+	"[convergence][native-ruleset][resource-logistics]"
+) {
+	GameManager manager {
+		[]() {},
+		[]() -> uint64_t { return 0; },
+		[]() -> uint64_t { return 0; }
+	};
+
+	std::filesystem::path const data_root =
+		std::filesystem::path { __FILE__ }.parent_path().parent_path()
+		/ "data" / "native-ruleset-bootstrap";
+
+	REQUIRE(manager.load_native_economy_bootstrap(data_root));
+	REQUIRE(manager.setup_native_instance());
+
+	InstanceManager* const instance = manager.get_instance_manager();
+	REQUIRE(instance != nullptr);
+
+	REQUIRE(instance->configure_live_resource_supply_network(
+		std::vector<ResourceSourceState> {
+			ResourceSourceState {
+				.source_id = "mine_a",
+				.node = market_node_index_t { 11 },
+				.supply = ResourceSupplyState {
+					.nominal_per_tick = fixed_point_t(2),
+					.availability_fraction = fixed_point_t::_1
+				}
+			},
+			ResourceSourceState {
+				.source_id = "mine_b",
+				.node = market_node_index_t { 12 },
+				.supply = ResourceSupplyState {
+					.nominal_per_tick = fixed_point_t(2),
+					.availability_fraction = fixed_point_t::_1
+				}
+			}
+		},
+		ResourceBufferState {
+			.capacity = fixed_point_t(2),
+			.inventory = fixed_point_t(2)
+		}
+	));
+
+	TransportCorridor route_a {
+		market_node_index_t { 11 },
+		market_node_index_t { 22 }
+	};
+	route_a.add_leg(TransportLeg {
+		.nominal_capacity = fixed_point_t(2),
+		.availability_fraction = fixed_point_t::_1,
+		.open = true
+	});
+
+	TransportCorridor route_b {
+		market_node_index_t { 12 },
+		market_node_index_t { 22 }
+	};
+	route_b.add_leg(TransportLeg {
+		.nominal_capacity = fixed_point_t(2),
+		.availability_fraction = fixed_point_t::_1,
+		.open = true
+	});
+
+	REQUIRE(instance->configure_live_resource_source_routes(
+		std::vector<ResourceSourceRoute> {
+			ResourceSourceRoute { "mine_a", std::move(route_a) },
+			ResourceSourceRoute { "mine_b", std::move(route_b) }
+		}
+	));
+
+	REQUIRE(manager.start_game_session());
+
+	// The mine remains fully productive. Only its logistics route is denied.
+	REQUIRE(instance->set_live_resource_route_access("mine_a", false));
+
+	instance->force_tick_and_update();
+	LiveEconomyStatus first = instance->get_live_economy_status();
+
+	CHECK(first.source_nominal_inflow == fixed_point_t(4));
+	CHECK(first.source_buffer_draw == fixed_point_t(2));
+	CHECK(first.source_buffer_inventory == fixed_point_t::_0);
+	CHECK(first.source_unmet_inflow == fixed_point_t::_0);
+	CHECK(first.upstream_output == fixed_point_t(4));
+
+	instance->force_tick_and_update();
+	LiveEconomyStatus second = instance->get_live_economy_status();
+
+	CHECK(second.source_nominal_inflow == fixed_point_t(4));
+	CHECK(second.source_buffer_inventory == fixed_point_t::_0);
+	CHECK(second.source_unmet_inflow == fixed_point_t(2));
+	CHECK(second.upstream_output == fixed_point_t(2));
+
+	REQUIRE(manager.end_game_session());
+}

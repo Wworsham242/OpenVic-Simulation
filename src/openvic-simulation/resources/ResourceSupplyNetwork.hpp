@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "openvic-simulation/resources/ResourceSupply.hpp"
+#include "openvic-simulation/resources/ResourceSourceAccess.hpp"
 #include "openvic-simulation/types/TypedIndices.hpp"
 
 namespace OpenVic {
@@ -77,8 +78,22 @@ private:
 		return it != sources.end() ? &*it : nullptr;
 	}
 
-public:
-	ResourceSupplyNetwork() = default;
+private:
+	[[nodiscard]] static ResourceSourceAccess const* find_access(
+		std::vector<ResourceSourceAccess> const& access,
+		std::string_view source_id
+	) {
+		auto const it = std::find_if(
+			access.begin(),
+			access.end(),
+			[source_id](ResourceSourceAccess const& item) {
+				return item.source_id == source_id;
+			}
+		);
+		return it != access.end() ? &*it : nullptr;
+	}
+
+public:	ResourceSupplyNetwork() = default;
 
 	ResourceSupplyNetwork(
 		std::vector<ResourceSourceState> new_sources,
@@ -121,6 +136,26 @@ public:
 		}
 		return total;
 	}
+	[[nodiscard]] fixed_point_t deliverable_supply_per_tick(
+		std::vector<ResourceSourceAccess> const& access
+	) const {
+		fixed_point_t total = 0;
+
+		for (ResourceSourceState const& source : sources) {
+			fixed_point_t const physical =
+				source.supply.accessible_per_tick();
+
+			ResourceSourceAccess const* const route =
+				find_access(access, source.source_id);
+
+			// Missing access entry means unconstrained for backward compatibility.
+			total += route != nullptr
+				? route->constrain(physical)
+				: physical;
+		}
+
+		return total;
+	}
 
 	[[nodiscard]] fixed_point_t buffer_inventory() const {
 		return buffer.inventory;
@@ -139,10 +174,13 @@ public:
 	///
 	/// Accessible source flow is consumed first. Surplus replenishes the buffer.
 	/// Shortfall draws the buffer. Any remainder becomes explicit unmet demand.
-	[[nodiscard]] ResourceFlowResult fulfill(fixed_point_t demand) {
+	[[nodiscard]] ResourceFlowResult fulfill(
+		fixed_point_t demand,
+		std::vector<ResourceSourceAccess> const& access
+	) {
 		ResourceFlowResult result {
 			.nominal_supply = nominal_supply_per_tick(),
-			.accessible_supply = accessible_supply_per_tick()
+			.accessible_supply = deliverable_supply_per_tick(access)
 		};
 
 		if (demand <= fixed_point_t::_0) {
@@ -162,6 +200,10 @@ public:
 		result.delivered = direct + result.buffer_draw;
 		result.unmet = remaining;
 		return result;
+	}
+
+	[[nodiscard]] ResourceFlowResult fulfill(fixed_point_t demand) {
+		return fulfill(demand, {});
 	}
 };
 

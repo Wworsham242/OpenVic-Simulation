@@ -14,6 +14,23 @@
 
 namespace OpenVic {
 
+struct ResourceSourceRoute final {
+	std::string source_id;
+	TransportCorridor corridor;
+	bool access_allowed = true;
+	fixed_point_t accessible_fraction = fixed_point_t::_1;
+
+	ResourceSourceRoute(
+		std::string new_source_id,
+		TransportCorridor new_corridor,
+		bool new_access_allowed = true,
+		fixed_point_t new_accessible_fraction = fixed_point_t::_1
+	) : source_id { std::move(new_source_id) },
+		corridor { std::move(new_corridor) },
+		access_allowed { new_access_allowed },
+		accessible_fraction { new_accessible_fraction } {}
+};
+
 struct LiveEconomyStatus final {
 	bool configured = false;
 	uint64_t completed_daily_ticks = 0;
@@ -52,6 +69,8 @@ private:
 
 	ResourceSupplyNetwork source_network;
 
+	std::vector<ResourceSourceRoute> resource_routes;
+
 	GoodDefinition const& intermediate_good;
 	GoodDefinition const& final_good;
 
@@ -65,6 +84,22 @@ private:
 	TransportCorridor corridor;
 
 	LiveEconomyStatus status {};
+
+	[[nodiscard]] std::vector<ResourceSourceAccess> build_resource_source_access() const {
+		std::vector<ResourceSourceAccess> access;
+		access.reserve(resource_routes.size());
+
+		for (ResourceSourceRoute const& route : resource_routes) {
+			access.push_back(ResourceSourceAccess {
+				.source_id = route.source_id,
+				.delivery_capacity = route.corridor.calculate_bottleneck_capacity(),
+				.accessible_fraction = route.accessible_fraction,
+				.access_allowed = route.access_allowed
+			});
+		}
+
+		return access;
+	}
 
 	void refresh_status_from_market() {
 		status.source_nominal_inflow = source_network.nominal_supply_per_tick();
@@ -176,10 +211,37 @@ public:
 		refresh_status_from_market();
 		return true;
 	}
+	[[nodiscard]] bool configure_resource_source_routes(
+		std::vector<ResourceSourceRoute> routes
+	) {
+		for (ResourceSourceRoute const& route : routes) {
+			if (route.source_id.empty()) {
+				return false;
+			}
+		}
+		resource_routes = std::move(routes);
+		return true;
+	}
+
+	[[nodiscard]] bool set_resource_route_access(
+		std::string_view source_id,
+		bool access_allowed
+	) {
+		for (ResourceSourceRoute& route : resource_routes) {
+			if (route.source_id == source_id) {
+				route.access_allowed = access_allowed;
+				return true;
+			}
+		}
+		return false;
+	}
 
 	void pre_market_daily_tick() {
 		ResourceFlowResult const source_flow =
-			source_network.fulfill(scenario.source_inflow_per_daily_tick);
+			source_network.fulfill(
+				scenario.source_inflow_per_daily_tick,
+				build_resource_source_access()
+			);
 
 		status.source_buffer_draw = source_flow.buffer_draw;
 		status.source_unmet_inflow = source_flow.unmet;

@@ -156,6 +156,25 @@ namespace OpenVic {
 					availability_fraction
 				);
 		}
+		[[nodiscard]] bool configure_live_resource_source_routes(
+			std::vector<ResourceSourceRoute> routes
+		) {
+			return live_economy_runtime != nullptr
+				&& live_economy_runtime->configure_resource_source_routes(
+					std::move(routes)
+				);
+		}
+
+		[[nodiscard]] bool set_live_resource_route_access(
+			std::string_view source_id,
+			bool access_allowed
+		) {
+			return live_economy_runtime != nullptr
+				&& live_economy_runtime->set_resource_route_access(
+					source_id,
+					access_allowed
+				);
+		}
 		/// Register one generalized actor authority profile.
 		[[nodiscard]] bool register_actor_authority(ActorAuthorityProfile profile) {
 			return authority_registry.register_profile(std::move(profile));
