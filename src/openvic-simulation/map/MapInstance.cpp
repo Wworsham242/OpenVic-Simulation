@@ -174,12 +174,27 @@ void MapInstance::update_gamestate(InstanceManager const& instance_manager) {
 }
 
 void MapInstance::map_tick() {
-	thread_pool.process_province_ticks();
-	//state tick
-	//after province tick as province tick sets pop employment to 0
-	//state tick will update pop employment via factories
+// Phase 1: all provinces complete POP work, employment reset,
+// building ticks and RGO employment preparation.
+thread_pool.process_province_ticks();
+
+// Phase 2 compatibility: preserve inherited RGO allocation policy,
+// but execute it only after every POP employment reset has completed.
+for (ProvinceInstance& province : get_province_instances()) {
+province.rgo.allocate_legacy_workforce();
 }
 
+// Phase 3: RGO production and sell-order publication occur only after
+// employment allocation has completed across the map.
+memory::vector<fixed_point_t> reusable_vector;
+for (ProvinceInstance& province : get_province_instances()) {
+province.rgo.production_cycle(reusable_vector);
+reusable_vector.clear();
+}
+
+// Future state/industrial employers belong in Phase 2 rather than
+// implicitly receiving whatever RGO execution happened to leave behind.
+}
 void MapInstance::initialise_for_new_game(InstanceManager const& instance_manager) {
 	update_gamestate(instance_manager);
 	thread_pool.process_province_initialise_for_new_game();

@@ -407,7 +407,7 @@ void ProvinceInstance::province_tick(
 	for (BuildingInstance& building : buildings) {
 		building.tick(today);
 	}
-	rgo.rgo_tick(reusable_vectors[0]);
+	rgo.prepare_employment_cycle();
 }
 
 bool ProvinceInstance::add_unit_instance_group(UnitInstanceGroup& group) {

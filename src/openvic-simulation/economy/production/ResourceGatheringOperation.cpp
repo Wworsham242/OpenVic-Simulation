@@ -161,6 +161,9 @@ owner_pops_cache_nullable =
 }
 }
 
+void ResourceGatheringOperation::allocate_legacy_workforce() {
+hire();
+}
 fixed_point_t ResourceGatheringOperation::get_remaining_workforce_demand() const {
 if (production_type_nullable == nullptr || max_employee_count_cache <= 0) {
 return fixed_point_t::_0;

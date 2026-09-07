@@ -76,6 +76,7 @@ namespace OpenVic {
 // These methods expose demand/eligibility/assignment while retaining
 // RGO-owned Employee records, payroll caches and production mechanics.
 void prepare_employment_cycle();
+		void allocate_legacy_workforce();
 
 [[nodiscard]] fixed_point_t get_remaining_workforce_demand() const;
 [[nodiscard]] bool accepts_worker(Pop const& pop) const;
