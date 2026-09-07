@@ -207,10 +207,9 @@ void InstanceManager::tick() {
 	if (live_economy_runtime != nullptr) {
 		live_economy_runtime->run_due_daily_cycles(
 			previous_time, simulation_timeline.current_time(),
-			[](SimTime) -> std::optional<std::span<Pop>> {
+			[this](SimTime) -> std::optional<WorkforcePool> {
 				// map_tick has completed POP reset and existing RGO employment.
-				// Routing a local upstream POP pool remains behind A5's seam.
-				return std::nullopt;
+				return live_economy_runtime->prepare_upstream_site(map_instance);
 			},
 			clear_market
 		);

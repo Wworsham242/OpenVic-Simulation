@@ -137,6 +137,7 @@ private:
 	bool record_provenance;
 	std::optional<LiveEconomyCycleProvenance> pending_provenance;
 	std::optional<LiveEconomyCycleProvenance> completed_provenance;
+	std::optional<ProductiveSiteBinding> upstream_site;
 
 	[[nodiscard]] std::vector<ResourceSourceAccess> build_resource_source_access() const {
 		std::vector<ResourceSourceAccess> access;
@@ -329,6 +330,27 @@ public:
 		return true;
 	}
 
+	[[nodiscard]] bool bind_upstream_site(ProductiveSiteBinding binding, MapInstance& map) {
+		if (!binding.resolve(map, upstream.get_production_type())) { return false; }
+		upstream_site = std::move(binding);
+		return true;
+	}
+
+	// Called by the A6 prepare callback after map_tick: province-local labor
+	// is post-RGO residual unemployment during this migration, not a permanent
+	// priority policy. Re-resolve both capacity and workforce every due cycle.
+	[[nodiscard]] std::optional<WorkforcePool> prepare_upstream_site(MapInstance& map) {
+		if (!upstream_site) { return std::nullopt; }
+		auto site = upstream_site->resolve(map, upstream.get_production_type());
+		if (!site) {
+			// A missing/mismatched world facility must not reuse stale capacity.
+			upstream.set_capacity(0);
+			return WorkforcePool { std::span<Pop> {} };
+		}
+		upstream.set_capacity(site->installed_capacity);
+		return site->workforce;
+	}
+
 	[[nodiscard]] bool set_upstream_capacity_from_facility(
 		BuildingType const& facility,
 		building_level_t installed_level
@@ -488,10 +510,11 @@ public:
 	// Supply the current local POP pool after the day's employment reset.
 	// An omitted pool preserves the existing externally configured workforce;
 	// an explicitly empty pool means no workers. No POP references are retained.
-	void pre_market_daily_tick(std::optional<std::span<Pop>> upstream_pops = std::nullopt) {
+	void pre_market_daily_tick(std::optional<WorkforcePool> upstream_pops = std::nullopt) {
 		pending_provenance.reset();
 		if (record_provenance) {
 			pending_provenance.emplace();
+			pending_provenance->productive_site = upstream_site;
 			pending_provenance->upstream_process_id = upstream.get_production_type().get_identifier();
 			pending_provenance->downstream_process_id = downstream.get_production_type().get_identifier();
 			pending_provenance->intermediate_good_id = intermediate_good.get_identifier();
@@ -500,7 +523,7 @@ public:
 		downstream_bridge.reset_cycle_result();
 		if (upstream_pops.has_value()) {
 			WorkforceAllocationResult allocation;
-			(void)allocate_producer_workforce(upstream, *upstream_pops, &allocation);
+			(void)allocate_producer_workforce_from_pool(upstream, *upstream_pops, &allocation);
 			if (pending_provenance) {
 				pending_provenance->workforce = allocation;
 			}

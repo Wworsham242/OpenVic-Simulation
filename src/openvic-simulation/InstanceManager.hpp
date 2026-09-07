@@ -132,6 +132,11 @@ namespace OpenVic {
 				? live_economy_runtime->get_latest_provenance() : std::nullopt;
 		}
 
+		[[nodiscard]] bool bind_live_upstream_site(ProductiveSiteBinding binding) {
+			return live_economy_runtime != nullptr
+				&& live_economy_runtime->bind_upstream_site(std::move(binding), map_instance);
+		}
+
 		/// Apply an externally computed resource-domain availability result to
 		/// the live economy source boundary. The economy does not infer the
 		/// cause; it consumes the resulting accessible physical flow.

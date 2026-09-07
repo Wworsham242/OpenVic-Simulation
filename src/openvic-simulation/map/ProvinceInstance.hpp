@@ -103,6 +103,8 @@ namespace OpenVic {
 		constexpr TypedSpan<province_building_index_t, const BuildingInstance> get_buildings() const {
 			return buildings;
 		}
+		// Edit a real facility through BuildingInstance's validated APIs.
+		BuildingInstance* get_mutable_building_by_identifier(std::string_view identifier);
 	private:
 		memory::vector<std::reference_wrapper<ArmyInstance>> SPAN_PROPERTY(armies);
 		memory::vector<std::reference_wrapper<NavyInstance>> SPAN_PROPERTY(navies);

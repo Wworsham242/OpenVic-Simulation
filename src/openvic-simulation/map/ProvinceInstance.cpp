@@ -46,6 +46,13 @@ ProvinceInstance::ProvinceInstance(
 	rgo.setup_location_ptr(*this);
 }
 
+BuildingInstance* ProvinceInstance::get_mutable_building_by_identifier(std::string_view identifier) {
+	for (BuildingInstance& building : buildings) {
+		if (building.get_identifier() == identifier) { return &building; }
+	}
+	return nullptr;
+}
+
 ModifierSum const& ProvinceInstance::get_owner_modifier_sum() const {
 	return owner->get_modifier_sum();
 }

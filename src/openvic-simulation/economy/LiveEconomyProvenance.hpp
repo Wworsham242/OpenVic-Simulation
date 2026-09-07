@@ -4,6 +4,7 @@
 #include <string>
 
 #include "openvic-simulation/core/simulation/SimTime.hpp"
+#include "openvic-simulation/economy/ProductiveSiteBinding.hpp"
 #include "openvic-simulation/economy/production/AggregateProducer.hpp"
 #include "openvic-simulation/economy/production/AggregateProducerMarketBridge.hpp"
 #include "openvic-simulation/economy/production/WorkforceAllocation.hpp"
@@ -19,6 +20,7 @@ struct LiveEconomyCycleProvenance final {
 	uint64_t cycle = 0;
 	// Direct compatibility pre/post calls have no scheduled due time.
 	std::optional<SimTime> due_time;
+	std::optional<ProductiveSiteBinding> productive_site;
 	std::string upstream_process_id;
 	std::string downstream_process_id;
 	std::string intermediate_good_id;

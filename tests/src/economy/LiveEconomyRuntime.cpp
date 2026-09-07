@@ -15,6 +15,8 @@
 #include "openvic-simulation/economy/production/ResourceGatheringOperationDeps.hpp"
 #include "openvic-simulation/economy/trading/MarketInstance.hpp"
 #include "openvic-simulation/map/ProvinceDefinition.hpp"
+#include "openvic-simulation/map/MapDefinition.hpp"
+#include "openvic-simulation/map/MapInstance.hpp"
 #include "openvic-simulation/map/ProvinceInstance.hpp"
 #include "openvic-simulation/map/ProvinceInstanceDeps.hpp"
 #include "openvic-simulation/modifier/ModifierManager.hpp"
@@ -292,12 +294,12 @@ namespace {
 			: market { threads, defines.get_country_defines(), goods },
 			province { definition, ProvinceInstanceDeps { buildings, rules, aggregates, rgo_deps, {} } } {}
 
-		Pop make_pop(PopType const& type, int size, size_t id) {
+		Pop make_pop(PopType const& type, int size, size_t id, ProvinceInstance* location = nullptr) {
 			struct InitialPop : PopBase {
 				InitialPop(PopType const& type, Culture const& culture, Religion const& religion, int size)
 					: PopBase { type, culture, religion, pop_size_t { size }, 0, 0, nullptr } {}
 			};
-			return Pop { province, InitialPop { type, culture, religion, size },
+			return Pop { location != nullptr ? *location : province, InitialPop { type, culture, religion, size },
 				pop_deps, pop_id_in_province_t { id } };
 		}
 	};
@@ -705,4 +707,156 @@ TEST_CASE("Provenance retains only the completed cycle and respects cadence part
 	split.runtime.post_market_daily_tick();
 	CHECK(split.runtime.get_latest_provenance()->cycle == 4);
 	CHECK_FALSE(split.runtime.get_latest_provenance()->due_time.has_value());
+}
+
+namespace {
+	struct BoundWorldFixture {
+		LiveEconomyFixture economy { workforce_jobs(), pop_size_t { 10 }, ProductionType::template_type_t::PROCESS };
+		GoodInstanceManager goods { economy.definitions, economy.rules };
+		WorkforcePopFixture population { economy.rules, goods };
+		MapDefinition definition;
+		std::unique_ptr<MapInstance> map;
+		LiveEconomyScenarioDefinition scenario = economy.make_scenario();
+		LiveEconomyRuntime runtime { economy.rules, goods, scenario };
+		SimulationTimeline timeline;
+		ProductiveSiteBinding binding { "1", "plant", "live_upstream", LaborPoolScope::ProvinceLocal };
+		uint64_t clearings = 0;
+
+		BoundWorldFixture() {
+			BuildingType::building_type_args_t args;
+			args.type = "productive_site";
+			args.in_province = true;
+			args.capacity_per_level = 2;
+			args.max_level = building_level_t { 5 };
+			args.production_type = &*economy.upstream_process;
+			REQUIRE(population.buildings.add_building_type("plant", args));
+			population.buildings.lock_building_types();
+			REQUIRE(definition.set_max_provinces(province_index_t { 2 }));
+			REQUIRE(definition.add_province_definition("1", colour_t { 1, 2, 3 }));
+			REQUIRE(definition.add_province_definition("2", colour_t { 4, 5, 6 }));
+			definition.lock_province_definitions();
+			map = std::make_unique<MapInstance>(definition, ProvinceInstanceDeps {
+				population.buildings, economy.rules, population.aggregates, population.rgo_deps, {}
+			}, population.threads);
+			plant().set_level(building_level_t { 2 });
+			replace_population("1", 40);
+			replace_population("2", 100);
+			REQUIRE(runtime.bind_upstream_site(binding, *map));
+		}
+
+		ProvinceInstance& province(std::string_view id) {
+			auto* result = map->get_province_instance_by_identifier(id);
+			REQUIRE(result != nullptr);
+			return *result;
+		}
+		BuildingInstance& plant() {
+			auto* result = province("1").get_mutable_building_by_identifier("plant");
+			REQUIRE(result != nullptr);
+			return *result;
+		}
+		void replace_population(std::string_view id, int size) {
+			auto& location = province(id);
+			location.get_mutable_pops().clear();
+			location.get_mutable_pops().emplace(population.make_pop(population.eligible, size, 1, &location));
+		}
+		void cycle() {
+			auto previous = timeline.current_time();
+			REQUIRE(timeline.advance(24));
+			// Fresh authoritative POPs in this fixture represent prepared daily
+			// availability. Production uses the same post-map resolver as InstanceManager.
+			runtime.run_due_daily_cycles(previous, timeline.current_time(),
+				[&](SimTime) { return runtime.prepare_upstream_site(*map); },
+				[&]() {
+					++clearings;
+					execute_intermediate_market(goods.get_good_instance_by_definition(*economy.intermediate));
+				}
+			);
+		}
+	};
+}
+
+TEST_CASE("World productive site derives capacity and hires from its province",
+	"[economy][productive-site][world]") {
+	BoundWorldFixture world;
+	world.cycle();
+	auto p = world.runtime.get_latest_provenance();
+	REQUIRE(p.has_value());
+	CHECK(p->productive_site == std::optional<ProductiveSiteBinding> { world.binding });
+	CHECK(p->due_time == std::optional<SimTime> { SimTime { 24 } });
+	CHECK(world.plant().get_level() == building_level_t { 2 });
+	CHECK(p->upstream.installed_capacity == fixed_point_t { 4 });
+	REQUIRE(p->workforce.has_value());
+	CHECK(p->workforce->allocated == fixed_point_t { 40 });
+	CHECK(p->upstream.actual_output == fixed_point_t { 4 });
+	CHECK(p->upstream_market.output_sold == fixed_point_t { 4 });
+	CHECK(p->downstream_market.input_bought == fixed_point_t { 4 });
+	CHECK(p->downstream.actual_output == fixed_point_t { 2 });
+	CHECK(world.province("1").get_mutable_pops().begin()->get_unemployed() == pop_size_t { 0 });
+	CHECK(world.clearings == 1);
+}
+
+TEST_CASE("World building level changes the bound producer on the next cadence",
+	"[economy][productive-site][capacity]") {
+	BoundWorldFixture world;
+	world.cycle();
+	CHECK(world.runtime.get_status().upstream_output == fixed_point_t { 4 });
+	world.plant().set_level(building_level_t { 1 });
+	// Replace the day's POP availability in the world, not in the producer.
+	world.replace_population("1", 40);
+	world.cycle();
+	auto p = world.runtime.get_latest_provenance();
+	REQUIRE(p.has_value());
+	CHECK(p->upstream.installed_capacity == fixed_point_t { 2 });
+	REQUIRE(p->workforce.has_value());
+	CHECK(p->workforce->requested == fixed_point_t { 20 });
+	CHECK(p->workforce->allocated == fixed_point_t { 20 });
+	CHECK(p->upstream.actual_output == fixed_point_t { 2 });
+	CHECK(p->upstream_market.output_sold == fixed_point_t { 2 });
+	CHECK(p->downstream.actual_output == fixed_point_t { 1 });
+	CHECK(world.clearings == 2);
+}
+
+TEST_CASE("Reduced province population limits output without borrowing unrelated workers",
+	"[economy][productive-site][labor][identity]") {
+	BoundWorldFixture world;
+	world.cycle();
+	world.replace_population("1", 20);
+	world.cycle();
+	auto p = world.runtime.get_latest_provenance();
+	REQUIRE(p.has_value());
+	CHECK(p->upstream.installed_capacity == fixed_point_t { 4 });
+	REQUIRE(p->workforce.has_value());
+	CHECK(p->workforce->allocated == fixed_point_t { 20 });
+	CHECK(p->upstream.labor_limited);
+	CHECK(p->upstream.actual_output == fixed_point_t { 2 });
+	CHECK(p->upstream_market.output_sold == fixed_point_t { 2 });
+	CHECK(p->downstream.actual_output == fixed_point_t { 1 });
+	CHECK(world.province("2").get_mutable_pops().begin()->get_unemployed() == pop_size_t { 100 });
+}
+
+TEST_CASE("Site binding validates identity and uses only residual authoritative unemployment",
+	"[economy][productive-site][validation]") {
+	BoundWorldFixture world;
+	auto invalid = world.binding;
+	invalid.province_id = "missing";
+	CHECK_FALSE(world.runtime.bind_upstream_site(invalid, *world.map));
+	invalid = world.binding;
+	invalid.building_id = "missing";
+	CHECK_FALSE(world.runtime.bind_upstream_site(invalid, *world.map));
+	invalid = world.binding;
+	invalid.production_type_id = "live_downstream";
+	CHECK_FALSE(world.runtime.bind_upstream_site(invalid, *world.map));
+	CHECK_FALSE(world.binding.resolve(*world.map, *world.economy.downstream_process).has_value());
+	invalid = world.binding;
+	invalid.labor_scope = static_cast<LaborPoolScope>(99);
+	CHECK_FALSE(world.runtime.bind_upstream_site(invalid, *world.map));
+	// Model employment already claimed by the inherited earlier employer phase.
+	world.province("1").get_mutable_pops().begin()->hire(pop_size_t { 20 });
+	world.cycle();
+	auto p = world.runtime.get_latest_provenance();
+	REQUIRE(p.has_value());
+	REQUIRE(p->workforce.has_value());
+	CHECK(p->workforce->allocated == fixed_point_t { 20 });
+	CHECK(p->upstream.labor_limited);
+	CHECK(p->productive_site == std::optional<ProductiveSiteBinding> { world.binding });
 }

@@ -8,8 +8,9 @@
 
 using namespace OpenVic;
 
-fixed_point_t OpenVic::allocate_producer_workforce(
-	AggregateProducer& producer, std::span<Pop> pops, WorkforceAllocationResult* result
+template<typename Pops>
+static fixed_point_t allocate_workforce(
+	AggregateProducer& producer, Pops&& pops, WorkforceAllocationResult* result
 ) {
 	ProductionType const& process = producer.get_production_type();
 	fixed_point_t remaining = producer.get_capacity()
@@ -44,4 +45,19 @@ fixed_point_t OpenVic::allocate_producer_workforce(
 		result->allocated = allocated;
 	}
 	return allocated;
+}
+
+fixed_point_t OpenVic::allocate_producer_workforce(
+	AggregateProducer& producer, std::span<Pop> pops, WorkforceAllocationResult* result
+) {
+	return allocate_workforce(producer, pops, result);
+}
+
+fixed_point_t OpenVic::allocate_producer_workforce_from_pool(
+	AggregateProducer& producer, WorkforcePool const& pool, WorkforceAllocationResult* result
+) {
+	if (auto const* span = std::get_if<std::span<Pop>>(&pool)) {
+		return allocate_workforce(producer, *span, result);
+	}
+	return allocate_workforce(producer, std::get<WorkforceColonyView>(pool).pops, result);
 }
