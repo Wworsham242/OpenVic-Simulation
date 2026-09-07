@@ -202,6 +202,34 @@ namespace OpenVic {
 					access_allowed
 				);
 		}
+		[[nodiscard]] bool configure_live_logistics_graph(
+			std::vector<LogisticsGraphEdge> edges
+		) {
+			return live_economy_runtime != nullptr
+				&& live_economy_runtime->configure_logistics_graph(
+					std::move(edges)
+				);
+		}
+
+		[[nodiscard]] bool configure_live_resource_graph_routes(
+			std::vector<ResourceGraphRoute> routes
+		) {
+			return live_economy_runtime != nullptr
+				&& live_economy_runtime->configure_resource_graph_routes(
+					std::move(routes)
+				);
+		}
+
+		[[nodiscard]] bool set_live_logistics_graph_edge_open(
+			std::string_view edge_id,
+			bool open
+		) {
+			return live_economy_runtime != nullptr
+				&& live_economy_runtime->set_logistics_graph_edge_open(
+					edge_id,
+					open
+				);
+		}
 		/// Register one generalized actor authority profile.
 		[[nodiscard]] bool register_actor_authority(ActorAuthorityProfile profile) {
 			return authority_registry.register_profile(std::move(profile));

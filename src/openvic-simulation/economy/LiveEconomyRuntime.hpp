@@ -10,6 +10,7 @@
 #include "openvic-simulation/economy/LiveEconomyScenario.hpp"
 #include "openvic-simulation/economy/production/AggregateProducer.hpp"
 #include "openvic-simulation/economy/production/AggregateProducerMarketBridge.hpp"
+#include "openvic-simulation/economy/trading/LogisticsGraph.hpp"
 #include "openvic-simulation/economy/trading/MarketNodeAccess.hpp"
 #include "openvic-simulation/economy/trading/SharedTransportCapacity.hpp"
 #include "openvic-simulation/economy/trading/TransportCorridor.hpp"
@@ -66,6 +67,12 @@ struct ResourceAlternativeRoute final {
 	}
 };
 
+struct ResourceGraphRoute final {
+	std::string source_id;
+	market_node_index_t source_node {};
+	market_node_index_t destination_node {};
+};
+
 struct LiveEconomyStatus final {
 	bool configured = false;
 	uint64_t completed_daily_ticks = 0;
@@ -105,6 +112,8 @@ private:
 	ResourceSupplyNetwork source_network;
 	std::vector<ResourceSourceRoute> resource_routes;
 	std::vector<ResourceAlternativeRoute> alternative_resource_routes;
+	LogisticsGraph logistics_graph;
+	std::vector<ResourceGraphRoute> resource_graph_routes;
 	std::vector<SharedTransportCapacity> shared_transport_capacities;
 
 	GoodDefinition const& intermediate_good;
@@ -170,6 +179,27 @@ private:
 				if (source_access.source_id == alternate.source_id) {
 					source_access.delivery_capacity += alternate.effective_capacity();
 					source_access.access_allowed = true;
+					break;
+				}
+			}
+		}
+
+		// Apply graph-derived routing where explicitly configured. This replaces
+		// manually enumerated route capacity for that source while preserving
+		// old explicit-route behavior for sources not yet migrated to the graph.
+		for (ResourceGraphRoute const& graph_route : resource_graph_routes) {
+			LogisticsGraphPath const path = logistics_graph.find_route(
+				graph_route.source_node,
+				graph_route.destination_node
+			);
+
+			for (ResourceSourceAccess& source_access : access) {
+				if (source_access.source_id == graph_route.source_id) {
+					source_access.delivery_capacity =
+						path.found
+							? path.bottleneck_capacity
+							: fixed_point_t::_0;
+					source_access.access_allowed = path.found;
 					break;
 				}
 			}
@@ -352,6 +382,31 @@ public:
 			}
 		}
 		return false;
+	}
+	[[nodiscard]] bool configure_logistics_graph(
+		std::vector<LogisticsGraphEdge> edges
+	) {
+		return logistics_graph.configure(std::move(edges));
+	}
+
+	[[nodiscard]] bool configure_resource_graph_routes(
+		std::vector<ResourceGraphRoute> routes
+	) {
+		for (ResourceGraphRoute const& route : routes) {
+			if (route.source_id.empty()) {
+				return false;
+			}
+		}
+
+		resource_graph_routes = std::move(routes);
+		return true;
+	}
+
+	[[nodiscard]] bool set_logistics_graph_edge_open(
+		std::string_view edge_id,
+		bool open
+	) {
+		return logistics_graph.set_edge_open(edge_id, open);
 	}
 
 	void pre_market_daily_tick() {
