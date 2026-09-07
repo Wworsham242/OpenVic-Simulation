@@ -94,3 +94,48 @@ TEST_CASE(
 
 	CHECK_FALSE(manager.load_native_economy_bootstrap(missing));
 }
+TEST_CASE(
+	"Resource availability shock propagates into authoritative industrial output",
+	"[convergence][native-ruleset][resource-coupling]"
+) {
+	GameManager manager {
+		[]() {},
+		[]() -> uint64_t { return 0; },
+		[]() -> uint64_t { return 0; }
+	};
+
+	std::filesystem::path const data_root =
+		std::filesystem::path { __FILE__ }.parent_path().parent_path()
+		/ "data" / "native-ruleset-bootstrap";
+
+	REQUIRE(manager.load_native_economy_bootstrap(data_root));
+	REQUIRE(manager.setup_native_instance());
+
+	InstanceManager* const instance = manager.get_instance_manager();
+	REQUIRE(instance != nullptr);
+	REQUIRE(manager.start_game_session());
+
+	instance->force_tick_and_update();
+
+	LiveEconomyStatus before_shock = instance->get_live_economy_status();
+	REQUIRE(before_shock.completed_daily_ticks > 0);
+	CHECK(before_shock.source_nominal_inflow == fixed_point_t(4));
+	CHECK(before_shock.source_availability_fraction == fixed_point_t::_1);
+	CHECK(before_shock.source_accessible_inflow == fixed_point_t(4));
+	CHECK(before_shock.upstream_output == fixed_point_t(4));
+
+	// The resources domain publishes a total source outage. The economy does
+	// not receive a scripted "-production" modifier; it receives zero
+	// accessible physical feedstock and reacts through normal production.
+	REQUIRE(instance->set_live_resource_availability(fixed_point_t::_0));
+
+	instance->force_tick_and_update();
+
+	LiveEconomyStatus after_shock = instance->get_live_economy_status();
+	CHECK(after_shock.source_nominal_inflow == fixed_point_t(4));
+	CHECK(after_shock.source_availability_fraction == fixed_point_t::_0);
+	CHECK(after_shock.source_accessible_inflow == fixed_point_t::_0);
+	CHECK(after_shock.upstream_output == fixed_point_t::_0);
+
+	REQUIRE(manager.end_game_session());
+}

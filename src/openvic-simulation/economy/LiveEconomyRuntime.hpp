@@ -9,12 +9,17 @@
 #include "openvic-simulation/economy/trading/MarketNodeAccess.hpp"
 #include "openvic-simulation/economy/trading/TransportCorridor.hpp"
 #include "openvic-simulation/misc/GameRulesManager.hpp"
+#include "openvic-simulation/resources/ResourceSupply.hpp"
 
 namespace OpenVic {
 
 struct LiveEconomyStatus final {
 	bool configured = false;
 	uint64_t completed_daily_ticks = 0;
+
+	fixed_point_t source_nominal_inflow = 0;
+	fixed_point_t source_availability_fraction = fixed_point_t::_1;
+	fixed_point_t source_accessible_inflow = 0;
 
 	fixed_point_t upstream_output = 0;
 	fixed_point_t downstream_desired_output = 0;
@@ -40,6 +45,8 @@ private:
 	GoodInstanceManager& good_instance_manager;
 	LiveEconomyScenarioDefinition const& scenario;
 
+	ResourceSupplyState source_supply;
+
 	GoodDefinition const& intermediate_good;
 	GoodDefinition const& final_good;
 
@@ -55,6 +62,9 @@ private:
 	LiveEconomyStatus status {};
 
 	void refresh_status_from_market() {
+		status.source_nominal_inflow = source_supply.nominal_per_tick;
+		status.source_availability_fraction = source_supply.availability_fraction;
+		status.source_accessible_inflow = source_supply.accessible_per_tick();
 		GoodInstance& market =
 			good_instance_manager.get_good_instance_by_definition(intermediate_good);
 
@@ -88,6 +98,10 @@ public:
 	) : game_rules_manager { new_game_rules_manager },
 		good_instance_manager { new_good_instance_manager },
 		scenario { new_scenario },
+		source_supply {
+			.nominal_per_tick = new_scenario.source_inflow_per_daily_tick,
+			.availability_fraction = fixed_point_t::_1
+		},
 		intermediate_good { new_scenario.upstream_process->output_good },
 		final_good { new_scenario.downstream_process->output_good },
 		upstream {
@@ -117,10 +131,18 @@ public:
 		refresh_status_from_market();
 	}
 
+	[[nodiscard]] bool set_source_resource_availability(fixed_point_t availability_fraction) {
+		if (!source_supply.set_availability_fraction(availability_fraction)) {
+			return false;
+		}
+		refresh_status_from_market();
+		return true;
+	}
+
 	void pre_market_daily_tick() {
 		upstream.add_inventory(
 			*scenario.source_inflow_good,
-			scenario.source_inflow_per_daily_tick
+			source_supply.accessible_per_tick()
 		);
 
 		const AggregateProductionResult upstream_result = upstream.produce();

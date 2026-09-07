@@ -126,6 +126,14 @@ namespace OpenVic {
 				? live_economy_runtime->get_status()
 				: LiveEconomyStatus {};
 		}
+
+		/// Apply an externally computed resource-domain availability result to
+		/// the live economy source boundary. The economy does not infer the
+		/// cause; it consumes the resulting accessible physical flow.
+		[[nodiscard]] bool set_live_resource_availability(fixed_point_t availability_fraction) {
+			return live_economy_runtime != nullptr
+				&& live_economy_runtime->set_source_resource_availability(availability_fraction);
+		}
 		/// Register one generalized actor authority profile.
 		[[nodiscard]] bool register_actor_authority(ActorAuthorityProfile profile) {
 			return authority_registry.register_profile(std::move(profile));
