@@ -10,6 +10,7 @@
 #include "openvic-simulation/economy/trading/TransportCorridor.hpp"
 #include "openvic-simulation/misc/GameRulesManager.hpp"
 #include "openvic-simulation/resources/ResourceSupply.hpp"
+#include "openvic-simulation/resources/ResourceSupplyNetwork.hpp"
 
 namespace OpenVic {
 
@@ -20,6 +21,10 @@ struct LiveEconomyStatus final {
 	fixed_point_t source_nominal_inflow = 0;
 	fixed_point_t source_availability_fraction = fixed_point_t::_1;
 	fixed_point_t source_accessible_inflow = 0;
+	fixed_point_t source_buffer_inventory = 0;
+	fixed_point_t source_buffer_draw = 0;
+	fixed_point_t source_unmet_inflow = 0;
+	size_t source_count = 0;
 
 	fixed_point_t upstream_output = 0;
 	fixed_point_t downstream_desired_output = 0;
@@ -45,7 +50,7 @@ private:
 	GoodInstanceManager& good_instance_manager;
 	LiveEconomyScenarioDefinition const& scenario;
 
-	ResourceSupplyState source_supply;
+	ResourceSupplyNetwork source_network;
 
 	GoodDefinition const& intermediate_good;
 	GoodDefinition const& final_good;
@@ -62,9 +67,14 @@ private:
 	LiveEconomyStatus status {};
 
 	void refresh_status_from_market() {
-		status.source_nominal_inflow = source_supply.nominal_per_tick;
-		status.source_availability_fraction = source_supply.availability_fraction;
-		status.source_accessible_inflow = source_supply.accessible_per_tick();
+		status.source_nominal_inflow = source_network.nominal_supply_per_tick();
+		status.source_accessible_inflow = source_network.accessible_supply_per_tick();
+		status.source_availability_fraction =
+			status.source_nominal_inflow > fixed_point_t::_0
+				? status.source_accessible_inflow / status.source_nominal_inflow
+				: fixed_point_t::_1;
+		status.source_buffer_inventory = source_network.buffer_inventory();
+		status.source_count = source_network.source_count();
 		GoodInstance& market =
 			good_instance_manager.get_good_instance_by_definition(intermediate_good);
 
@@ -98,9 +108,17 @@ public:
 	) : game_rules_manager { new_game_rules_manager },
 		good_instance_manager { new_good_instance_manager },
 		scenario { new_scenario },
-		source_supply {
-			.nominal_per_tick = new_scenario.source_inflow_per_daily_tick,
-			.availability_fraction = fixed_point_t::_1
+		source_network {
+			{
+				ResourceSourceState {
+					.source_id = "scenario_source",
+					.node = new_scenario.source_node,
+					.supply = ResourceSupplyState {
+						.nominal_per_tick = new_scenario.source_inflow_per_daily_tick,
+						.availability_fraction = fixed_point_t::_1
+					}
+				}
+			}
 		},
 		intermediate_good { new_scenario.upstream_process->output_good },
 		final_good { new_scenario.downstream_process->output_good },
@@ -132,7 +150,27 @@ public:
 	}
 
 	[[nodiscard]] bool set_source_resource_availability(fixed_point_t availability_fraction) {
-		if (!source_supply.set_availability_fraction(availability_fraction)) {
+		return set_resource_source_availability("scenario_source", availability_fraction);
+	}
+
+	[[nodiscard]] bool configure_resource_supply_network(
+		std::vector<ResourceSourceState> sources,
+		ResourceBufferState buffer
+	) {
+		ResourceSupplyNetwork candidate { std::move(sources), buffer };
+		if (!candidate.is_valid()) {
+			return false;
+		}
+		source_network = std::move(candidate);
+		refresh_status_from_market();
+		return true;
+	}
+
+	[[nodiscard]] bool set_resource_source_availability(
+		std::string_view source_id,
+		fixed_point_t availability_fraction
+	) {
+		if (!source_network.set_source_availability(source_id, availability_fraction)) {
 			return false;
 		}
 		refresh_status_from_market();
@@ -140,9 +178,15 @@ public:
 	}
 
 	void pre_market_daily_tick() {
+		ResourceFlowResult const source_flow =
+			source_network.fulfill(scenario.source_inflow_per_daily_tick);
+
+		status.source_buffer_draw = source_flow.buffer_draw;
+		status.source_unmet_inflow = source_flow.unmet;
+
 		upstream.add_inventory(
 			*scenario.source_inflow_good,
-			source_supply.accessible_per_tick()
+			source_flow.delivered
 		);
 
 		const AggregateProductionResult upstream_result = upstream.produce();

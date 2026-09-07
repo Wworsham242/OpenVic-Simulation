@@ -139,3 +139,84 @@ TEST_CASE(
 
 	REQUIRE(manager.end_game_session());
 }
+
+TEST_CASE(
+	"Buffered multi-source disruption delays industrial output loss",
+	"[convergence][native-ruleset][resource-network]"
+) {
+	GameManager manager {
+		[]() {},
+		[]() -> uint64_t { return 0; },
+		[]() -> uint64_t { return 0; }
+	};
+
+	std::filesystem::path const data_root =
+		std::filesystem::path { __FILE__ }.parent_path().parent_path()
+		/ "data" / "native-ruleset-bootstrap";
+
+	REQUIRE(manager.load_native_economy_bootstrap(data_root));
+	REQUIRE(manager.setup_native_instance());
+
+	InstanceManager* const instance = manager.get_instance_manager();
+	REQUIRE(instance != nullptr);
+
+	REQUIRE(instance->configure_live_resource_supply_network(
+		std::vector<ResourceSourceState> {
+			ResourceSourceState {
+				.source_id = "mine_a",
+				.node = market_node_index_t { 11 },
+				.supply = ResourceSupplyState {
+					.nominal_per_tick = fixed_point_t(2),
+					.availability_fraction = fixed_point_t::_1
+				}
+			},
+			ResourceSourceState {
+				.source_id = "mine_b",
+				.node = market_node_index_t { 12 },
+				.supply = ResourceSupplyState {
+					.nominal_per_tick = fixed_point_t(2),
+					.availability_fraction = fixed_point_t::_1
+				}
+			}
+		},
+		ResourceBufferState {
+			.capacity = fixed_point_t(4),
+			.inventory = fixed_point_t(4)
+		}
+	));
+
+	REQUIRE(manager.start_game_session());
+
+	LiveEconomyStatus configured = instance->get_live_economy_status();
+	CHECK(configured.source_count == 2);
+	CHECK(configured.source_nominal_inflow == fixed_point_t(4));
+	CHECK(configured.source_accessible_inflow == fixed_point_t(4));
+	CHECK(configured.source_buffer_inventory == fixed_point_t(4));
+
+	REQUIRE(instance->set_live_resource_source_availability(
+		"mine_a",
+		fixed_point_t::_0
+	));
+
+	instance->force_tick_and_update();
+	LiveEconomyStatus first = instance->get_live_economy_status();
+	CHECK(first.source_accessible_inflow == fixed_point_t(2));
+	CHECK(first.source_buffer_draw == fixed_point_t(2));
+	CHECK(first.source_buffer_inventory == fixed_point_t(2));
+	CHECK(first.source_unmet_inflow == fixed_point_t::_0);
+	CHECK(first.upstream_output == fixed_point_t(4));
+
+	instance->force_tick_and_update();
+	LiveEconomyStatus second = instance->get_live_economy_status();
+	CHECK(second.source_buffer_inventory == fixed_point_t::_0);
+	CHECK(second.source_unmet_inflow == fixed_point_t::_0);
+	CHECK(second.upstream_output == fixed_point_t(4));
+
+	instance->force_tick_and_update();
+	LiveEconomyStatus third = instance->get_live_economy_status();
+	CHECK(third.source_buffer_inventory == fixed_point_t::_0);
+	CHECK(third.source_unmet_inflow == fixed_point_t(2));
+	CHECK(third.upstream_output == fixed_point_t(2));
+
+	REQUIRE(manager.end_game_session());
+}

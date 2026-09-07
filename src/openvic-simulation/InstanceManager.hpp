@@ -134,6 +134,28 @@ namespace OpenVic {
 			return live_economy_runtime != nullptr
 				&& live_economy_runtime->set_source_resource_availability(availability_fraction);
 		}
+
+		[[nodiscard]] bool configure_live_resource_supply_network(
+			std::vector<ResourceSourceState> sources,
+			ResourceBufferState buffer
+		) {
+			return live_economy_runtime != nullptr
+				&& live_economy_runtime->configure_resource_supply_network(
+					std::move(sources),
+					buffer
+				);
+		}
+
+		[[nodiscard]] bool set_live_resource_source_availability(
+			std::string_view source_id,
+			fixed_point_t availability_fraction
+		) {
+			return live_economy_runtime != nullptr
+				&& live_economy_runtime->set_resource_source_availability(
+					source_id,
+					availability_fraction
+				);
+		}
 		/// Register one generalized actor authority profile.
 		[[nodiscard]] bool register_actor_authority(ActorAuthorityProfile profile) {
 			return authority_registry.register_profile(std::move(profile));
