@@ -2897,3 +2897,203 @@ TEST_CASE(
 	CHECK_FALSE(redispatched->upstream.external_limited);
 	CHECK(redispatched->upstream.actual_output == fixed_point_t { 4 });
 }
+
+TEST_CASE(
+	"Generator operating characteristics constrain and order dispatch",
+	"[economy][utilities][electricity-grid][generator-characteristics][b12]"
+) {
+	LiveEconomyFixture fixture;
+
+	AggregateProducer plant {
+		"characteristics-plant",
+		*fixture.upstream_process,
+		fixed_point_t { 4 },
+		fixed_point_t::_1
+	};
+
+	std::vector<ProductiveSiteUtilityTarget> targets {
+		{
+			.employer_id = "characteristics-plant",
+			.producer = &plant
+		}
+	};
+
+	std::vector<ProductiveSiteUtilityRequirement> requirements {
+		{
+			.employer_id = "characteristics-plant",
+			.kind = ProductiveSiteUtilityKind::Electricity,
+			.required_per_output = fixed_point_t::_1,
+			.available_per_tick = fixed_point_t::_0
+		}
+	};
+
+	LogisticsGraph transmission;
+	REQUIRE(
+		transmission.configure(
+			{
+				LogisticsGraphEdge {
+					.edge_id = "cheap-line",
+					.source = market_node_index_t { 0 },
+					.destination = market_node_index_t { 10 },
+					.leg = TransportLeg {
+						.nominal_capacity = fixed_point_t { 4 }
+					}
+				},
+				LogisticsGraphEdge {
+					.edge_id = "fast-line",
+					.source = market_node_index_t { 20 },
+					.destination = market_node_index_t { 10 },
+					.leg = TransportLeg {
+						.nominal_capacity = fixed_point_t { 4 }
+					}
+				}
+			}
+		)
+	);
+
+	std::vector<ProductiveSiteElectricitySource> sources {
+		ProductiveSiteElectricitySource {
+			.source_id = "cheap_slow",
+			.source_node = market_node_index_t { 0 },
+			.available_generation_per_tick = fixed_point_t { 4 },
+			.availability_fraction = fixed_point_t::_1,
+			.minimum_stable_output = fixed_point_t { 2 },
+			.ramp_up_per_tick = fixed_point_t { 2 },
+			.ramp_down_per_tick = fixed_point_t { 2 },
+			.marginal_cost = fixed_point_t { 1 },
+			.dispatch_priority = 0
+		},
+		ProductiveSiteElectricitySource {
+			.source_id = "fast_expensive",
+			.source_node = market_node_index_t { 20 },
+			.available_generation_per_tick = fixed_point_t { 4 },
+			.availability_fraction = fixed_point_t::_1,
+			.ramp_up_per_tick = fixed_point_t { 4 },
+			.ramp_down_per_tick = fixed_point_t { 4 },
+			.marginal_cost = fixed_point_t { 5 },
+			.dispatch_priority = 0
+		}
+	};
+
+	auto allocations =
+		ProductiveSiteElectricityGridResolver::resolve_sources_stateful(
+			sources,
+			transmission,
+			{
+				ProductiveSiteElectricityConnection {
+					.employer_id = "characteristics-plant",
+					.destination_node = market_node_index_t { 10 }
+				}
+			},
+			targets,
+			requirements
+		);
+
+	REQUIRE(allocations.size() == 1);
+	CHECK(allocations[0].delivered == fixed_point_t { 4 });
+
+	// Cheap unit can only ramp from 0 to 2 on first tick; expensive unit fills 2.
+	CHECK(sources[0].current_dispatch_per_tick == fixed_point_t { 2 });
+	CHECK(sources[1].current_dispatch_per_tick == fixed_point_t { 2 });
+
+	allocations =
+		ProductiveSiteElectricityGridResolver::resolve_sources_stateful(
+			sources,
+			transmission,
+			{
+				ProductiveSiteElectricityConnection {
+					.employer_id = "characteristics-plant",
+					.destination_node = market_node_index_t { 10 }
+				}
+			},
+			targets,
+			requirements
+		);
+
+	CHECK(allocations[0].delivered == fixed_point_t { 4 });
+
+	// Second tick cheap unit can ramp to 4 and displace expensive generation.
+	CHECK(sources[0].current_dispatch_per_tick == fixed_point_t { 4 });
+	CHECK(sources[1].current_dispatch_per_tick == fixed_point_t::_0);
+}
+
+TEST_CASE(
+	"Runtime generator availability factor propagates into production",
+	"[economy][utilities][electricity-grid][generator-characteristics][availability][runtime][b12]"
+) {
+	LiveEconomyFixture fixture;
+	GoodInstanceManager goods { fixture.definitions, fixture.rules };
+	auto scenario = fixture.make_scenario();
+	LiveEconomyRuntime runtime { fixture.rules, goods, scenario };
+
+	REQUIRE(
+		runtime.configure_upstream_site_utility_requirements(
+			{
+				ProductiveSiteUtilityRequirement {
+					.employer_id = "site:primary",
+					.kind = ProductiveSiteUtilityKind::Electricity,
+					.required_per_output = fixed_point_t::_1,
+					.available_per_tick = fixed_point_t::_0
+				}
+			}
+		)
+	);
+
+	REQUIRE(
+		runtime.configure_upstream_electricity_sources(
+			{
+				ProductiveSiteElectricitySource {
+					.source_id = "variable_source",
+					.source_node = market_node_index_t { 0 },
+					.available_generation_per_tick = fixed_point_t { 4 },
+					.availability_fraction = fixed_point_t::_1,
+					.ramp_up_per_tick = fixed_point_t { 4 },
+					.ramp_down_per_tick = fixed_point_t { 4 }
+				}
+			},
+			{
+				LogisticsGraphEdge {
+					.edge_id = "variable-line",
+					.source = market_node_index_t { 0 },
+					.destination = market_node_index_t { 10 },
+					.leg = TransportLeg {
+						.nominal_capacity = fixed_point_t { 4 }
+					}
+				}
+			},
+			{
+				ProductiveSiteElectricityConnection {
+					.employer_id = "site:primary",
+					.destination_node = market_node_index_t { 10 }
+				}
+			}
+		)
+	);
+
+	GoodInstance& intermediate_market =
+		goods.get_good_instance_by_definition(*fixture.intermediate);
+
+	auto cycle = [&]() {
+		runtime.pre_market_daily_tick();
+		execute_intermediate_market(intermediate_market);
+		runtime.post_market_daily_tick();
+	};
+
+	cycle();
+	auto full = runtime.get_latest_provenance();
+	REQUIRE(full.has_value());
+	CHECK(full->upstream.actual_output == fixed_point_t { 4 });
+
+	REQUIRE(
+		runtime.set_upstream_electricity_source_availability(
+			"variable_source",
+			fixed_point_t::_1 / fixed_point_t { 2 }
+		)
+	);
+
+	cycle();
+	auto half = runtime.get_latest_provenance();
+	REQUIRE(half.has_value());
+	CHECK(half->upstream.external_limited);
+	CHECK(half->upstream.actual_output == fixed_point_t { 2 });
+}

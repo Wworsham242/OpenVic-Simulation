@@ -364,7 +364,7 @@ private:
         }
 
         if (electricity_grid_configured) {
-            (void)ProductiveSiteElectricityGridResolver::resolve_sources(
+            (void)ProductiveSiteElectricityGridResolver::resolve_sources_stateful(
                 electricity_sources,
                 electricity_transmission_graph,
                 electricity_connections,
@@ -1051,7 +1051,14 @@ preallocated_upstream_workforce = allocation;
 		for (ProductiveSiteElectricitySource const& source : sources) {
 			if (
 				source.source_id.empty() ||
-				source.available_generation_per_tick < fixed_point_t::_0
+				source.available_generation_per_tick < fixed_point_t::_0 ||
+				source.availability_fraction < fixed_point_t::_0 ||
+				source.availability_fraction > fixed_point_t::_1 ||
+				source.minimum_stable_output < fixed_point_t::_0 ||
+				source.ramp_up_per_tick < fixed_point_t::_0 ||
+				source.ramp_down_per_tick < fixed_point_t::_0 ||
+				source.marginal_cost < fixed_point_t::_0 ||
+				source.current_dispatch_per_tick < fixed_point_t::_0
 			) {
 				return false;
 			}
@@ -1126,6 +1133,29 @@ preallocated_upstream_workforce = allocation;
 			std::move(transmission_edges),
 			std::move(connections)
 		);
+	}
+
+	[[nodiscard]] bool set_upstream_electricity_source_availability(
+		std::string_view source_id,
+		fixed_point_t availability_fraction
+	) {
+		if (
+			!electricity_grid_configured ||
+			availability_fraction < fixed_point_t::_0 ||
+			availability_fraction > fixed_point_t::_1
+		) {
+			return false;
+		}
+
+		for (ProductiveSiteElectricitySource& source :
+				electricity_sources) {
+			if (source.source_id == source_id) {
+				source.availability_fraction = availability_fraction;
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	[[nodiscard]] bool set_upstream_electricity_source_generation(

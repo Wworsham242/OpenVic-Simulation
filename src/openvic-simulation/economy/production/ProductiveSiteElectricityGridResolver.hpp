@@ -23,7 +23,20 @@ struct ProductiveSiteElectricityGridState final {
 struct ProductiveSiteElectricitySource final {
 	std::string source_id;
 	market_node_index_t source_node {};
+
+	// Nominal/nameplate generation supplied by scenario/runtime state.
 	fixed_point_t available_generation_per_tick = fixed_point_t::_0;
+
+	// B12 operating characteristics. Defaults preserve B11 behavior.
+	fixed_point_t availability_fraction = fixed_point_t::_1;
+	fixed_point_t minimum_stable_output = fixed_point_t::_0;
+	fixed_point_t ramp_up_per_tick = fixed_point_t::usable_max;
+	fixed_point_t ramp_down_per_tick = fixed_point_t::usable_max;
+	fixed_point_t marginal_cost = fixed_point_t::_0;
+	int32_t dispatch_priority = 0;
+
+	// Stateful runtime dispatch history used by ramp constraints.
+	fixed_point_t current_dispatch_per_tick = fixed_point_t::_0;
 };
 
 struct ProductiveSiteElectricityAllocation final {
@@ -59,7 +72,11 @@ private:
 		std::string source_id;
 		market_node_index_t source_node {};
 		fixed_point_t available = fixed_point_t::_0;
+		fixed_point_t minimum_stable_output = fixed_point_t::_0;
+		fixed_point_t mandatory_floor = fixed_point_t::_0;
 		fixed_point_t dispatch_budget = fixed_point_t::_0;
+		fixed_point_t marginal_cost = fixed_point_t::_0;
+		int32_t dispatch_priority = 0;
 	};
 
 	struct SourceLoadDelivery final {
@@ -103,44 +120,104 @@ private:
 		std::vector<SourceBudget>& sources,
 		fixed_point_t total_requested
 	) {
-		fixed_point_t total_generation = fixed_point_t::_0;
-
-		for (SourceBudget const& source : sources) {
-			total_generation += source.available;
-		}
-
-		fixed_point_t const dispatch_total =
-			std::min(total_requested, total_generation);
-
-		if (
-			dispatch_total <= fixed_point_t::_0 ||
-			total_generation <= fixed_point_t::_0
-		) {
+		if (total_requested <= fixed_point_t::_0) {
 			return;
 		}
 
-		fixed_point_t remaining = dispatch_total;
-
-		for (SourceBudget& source : sources) {
-			source.dispatch_budget = std::min(
-				source.available,
-				dispatch_total * source.available / total_generation
-			);
-			remaining -= source.dispatch_budget;
+		// First honor committed/ramp-constrained floors. If those floors exceed
+		// load, proportionally curtail them as an emergency balancing action.
+		fixed_point_t total_floor = fixed_point_t::_0;
+		for (SourceBudget const& source : sources) {
+			total_floor += source.mandatory_floor;
 		}
 
-		// Stable source-id order makes fixed-point residue deterministic.
+		if (total_floor >= total_requested && total_floor > fixed_point_t::_0) {
+			fixed_point_t remaining = total_requested;
+
+			for (SourceBudget& source : sources) {
+				source.dispatch_budget = std::min(
+					source.available,
+					total_requested *
+						source.mandatory_floor /
+						total_floor
+				);
+				remaining -= source.dispatch_budget;
+			}
+
+			for (SourceBudget& source : sources) {
+				if (remaining <= fixed_point_t::_0) {
+					break;
+				}
+
+				fixed_point_t const headroom = std::max(
+					source.available - source.dispatch_budget,
+					fixed_point_t::_0
+				);
+
+				fixed_point_t const extra = std::min(headroom, remaining);
+				source.dispatch_budget += extra;
+				remaining -= extra;
+			}
+			return;
+		}
+
 		for (SourceBudget& source : sources) {
+			source.dispatch_budget = source.mandatory_floor;
+		}
+
+		fixed_point_t remaining =
+			std::max(total_requested - total_floor, fixed_point_t::_0);
+
+		// Merit order: explicit priority, then marginal cost, then source id.
+		std::vector<size_t> order;
+		order.reserve(sources.size());
+		for (size_t i = 0; i < sources.size(); ++i) {
+			order.push_back(i);
+		}
+
+		std::sort(
+			order.begin(),
+			order.end(),
+			[&sources](size_t lhs, size_t rhs) {
+				SourceBudget const& a = sources[lhs];
+				SourceBudget const& b = sources[rhs];
+
+				if (a.dispatch_priority != b.dispatch_priority) {
+					return a.dispatch_priority < b.dispatch_priority;
+				}
+				if (a.marginal_cost != b.marginal_cost) {
+					return a.marginal_cost < b.marginal_cost;
+				}
+				return a.source_id < b.source_id;
+			}
+		);
+
+		for (size_t const index : order) {
 			if (remaining <= fixed_point_t::_0) {
 				break;
 			}
 
-			fixed_point_t const unused = std::max(
+			SourceBudget& source = sources[index];
+			fixed_point_t const headroom = std::max(
 				source.available - source.dispatch_budget,
 				fixed_point_t::_0
 			);
 
-			fixed_point_t const extra = std::min(unused, remaining);
+			if (headroom <= fixed_point_t::_0) {
+				continue;
+			}
+
+			// A stopped unit only starts when enough demand exists to operate
+			// at or above its minimum stable output.
+			if (
+				source.dispatch_budget <= fixed_point_t::_0 &&
+				source.minimum_stable_output > fixed_point_t::_0 &&
+				remaining < source.minimum_stable_output
+			) {
+				continue;
+			}
+
+			fixed_point_t const extra = std::min(headroom, remaining);
 			source.dispatch_budget += extra;
 			remaining -= extra;
 		}
@@ -436,8 +513,8 @@ private:
 
 public:
 	[[nodiscard]] static std::vector<ProductiveSiteElectricityAllocation>
-	resolve_sources(
-		std::vector<ProductiveSiteElectricitySource> sources,
+	resolve_sources_stateful(
+		std::vector<ProductiveSiteElectricitySource>& sources,
 		LogisticsGraph const& transmission_graph,
 		std::vector<ProductiveSiteElectricityConnection> connections,
 		std::vector<ProductiveSiteUtilityTarget> const& targets,
@@ -506,13 +583,70 @@ public:
 		source_budgets.reserve(sources.size());
 
 		for (ProductiveSiteElectricitySource const& source : sources) {
+			fixed_point_t const nameplate = std::max(
+				source.available_generation_per_tick,
+				fixed_point_t::_0
+			);
+
+			fixed_point_t const availability = std::clamp(
+				source.availability_fraction,
+				fixed_point_t::_0,
+				fixed_point_t::_1
+			);
+
+			fixed_point_t const availability_limited =
+				nameplate * availability;
+
+			fixed_point_t const ramp_up_limited = std::min(
+				availability_limited,
+				source.current_dispatch_per_tick +
+					std::max(
+						source.ramp_up_per_tick,
+						fixed_point_t::_0
+					)
+			);
+
+			fixed_point_t const ramp_down_floor = std::max(
+				source.current_dispatch_per_tick -
+					std::max(
+						source.ramp_down_per_tick,
+						fixed_point_t::_0
+					),
+				fixed_point_t::_0
+			);
+
+			fixed_point_t mandatory_floor = std::min(
+				ramp_up_limited,
+				ramp_down_floor
+			);
+
+			if (
+				source.current_dispatch_per_tick > fixed_point_t::_0 &&
+				ramp_up_limited >= source.minimum_stable_output
+			) {
+				mandatory_floor = std::max(
+					mandatory_floor,
+					std::max(
+						source.minimum_stable_output,
+						fixed_point_t::_0
+					)
+				);
+			}
+
 			source_budgets.push_back(SourceBudget {
 				.source_id = source.source_id,
 				.source_node = source.source_node,
-				.available = std::max(
-					source.available_generation_per_tick,
+				.available = ramp_up_limited,
+				.minimum_stable_output = std::max(
+					source.minimum_stable_output,
 					fixed_point_t::_0
-				)
+				),
+				.mandatory_floor = std::min(
+					mandatory_floor,
+					ramp_up_limited
+				),
+				.marginal_cost = source.marginal_cost,
+				.dispatch_priority = source.dispatch_priority
 			});
 		}
 
@@ -595,7 +729,44 @@ public:
 			}
 		}
 
+		for (ProductiveSiteElectricitySource& source : sources) {
+			source.current_dispatch_per_tick =
+				delivered_by_source(
+					allocations.empty()
+						? std::vector<SourceLoadDelivery> {}
+						: [&]() {
+							std::vector<SourceLoadDelivery> delivered;
+							std::vector<Load> load_copy = loads;
+							accumulate_allocations(
+								allocations,
+								load_copy,
+								delivered
+							);
+							return delivered;
+						}(),
+					source.source_id
+				);
+		}
+
 		return results;
+	}
+
+	// Stateless compatibility wrapper for B10/B11 direct callers.
+	[[nodiscard]] static std::vector<ProductiveSiteElectricityAllocation>
+	resolve_sources(
+		std::vector<ProductiveSiteElectricitySource> sources,
+		LogisticsGraph const& transmission_graph,
+		std::vector<ProductiveSiteElectricityConnection> connections,
+		std::vector<ProductiveSiteUtilityTarget> const& targets,
+		std::vector<ProductiveSiteUtilityRequirement>& requirements
+	) {
+		return resolve_sources_stateful(
+			sources,
+			transmission_graph,
+			std::move(connections),
+			targets,
+			requirements
+		);
 	}
 
 	// B9 compatibility wrapper. Preserve the original B9 meaning of
