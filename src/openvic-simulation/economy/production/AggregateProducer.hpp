@@ -134,16 +134,20 @@ public:
 		current = clamp_nonnegative(current + quantity);
 	}
 
-	[[nodiscard]] fixed_point_t calculate_desired_output() const {
+	[[nodiscard]] fixed_point_t calculate_pre_external_desired_output() const {
 		const fixed_point_t effective_capacity = std::min(
 			capacity,
 			calculate_labor_supported_capacity()
 		);
 
-		fixed_point_t desired =
-			production_type.base_output_quantity *
+		return production_type.base_output_quantity *
 			effective_capacity *
 			utilization;
+	}
+
+	[[nodiscard]] fixed_point_t calculate_desired_output() const {
+		fixed_point_t desired =
+			calculate_pre_external_desired_output();
 
 		if (external_output_ceiling.has_value()) {
 			desired = std::min(desired, *external_output_ceiling);

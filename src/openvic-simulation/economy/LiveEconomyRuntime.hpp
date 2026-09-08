@@ -18,6 +18,7 @@
 #include "openvic-simulation/economy/production/WorkforceAllocation.hpp"
 #include "openvic-simulation/economy/production/ProductiveSiteMaterialFlowResolver.hpp"
 #include "openvic-simulation/economy/production/ProductiveSiteUtilityResolver.hpp"
+#include "openvic-simulation/economy/production/ProductiveSiteElectricityGridResolver.hpp"
 #include "openvic-simulation/economy/trading/LogisticsGraph.hpp"
 #include "openvic-simulation/economy/trading/MarketNodeAccess.hpp"
 #include "openvic-simulation/economy/trading/SharedTransportCapacity.hpp"
@@ -191,6 +192,10 @@ private:
 	std::vector<ResourceGraphRoute> resource_graph_routes;
 	std::vector<ProductiveSiteResourceRoute> upstream_site_resource_routes;
 	std::vector<ProductiveSiteUtilityRequirement> upstream_site_utility_requirements;
+	ProductiveSiteElectricityGridState electricity_grid;
+	LogisticsGraph electricity_transmission_graph;
+	std::vector<ProductiveSiteElectricityConnection> electricity_connections;
+	bool electricity_grid_configured = false;
 	std::vector<SharedTransportCapacity> shared_transport_capacities;
 
 	GoodDefinition const& intermediate_good;
@@ -356,6 +361,16 @@ private:
                 .employer_id = site->employer_id,
                 .producer = &site->producer
             });
+        }
+
+        if (electricity_grid_configured) {
+            (void)ProductiveSiteElectricityGridResolver::resolve(
+                electricity_grid,
+                electricity_transmission_graph,
+                electricity_connections,
+                targets,
+                upstream_site_utility_requirements
+            );
         }
 
         ProductiveSiteUtilityResolver::apply(
@@ -1023,6 +1038,78 @@ preallocated_upstream_workforce = allocation;
 	}
 
 
+
+	[[nodiscard]] bool configure_upstream_electricity_grid(
+		ProductiveSiteElectricityGridState grid,
+		std::vector<LogisticsGraphEdge> transmission_edges,
+		std::vector<ProductiveSiteElectricityConnection> connections
+	) {
+		if (grid.available_generation_per_tick < fixed_point_t::_0) {
+			return false;
+		}
+
+		for (ProductiveSiteElectricityConnection const& connection :
+				connections) {
+			if (connection.employer_id.empty()) {
+				return false;
+			}
+		}
+
+		std::sort(
+			connections.begin(),
+			connections.end(),
+			[](ProductiveSiteElectricityConnection const& lhs,
+				ProductiveSiteElectricityConnection const& rhs) {
+				return lhs.employer_id < rhs.employer_id;
+			}
+		);
+
+		for (size_t i = 1; i < connections.size(); ++i) {
+			if (
+				connections[i - 1].employer_id ==
+					connections[i].employer_id
+			) {
+				return false;
+			}
+		}
+
+		LogisticsGraph candidate;
+		if (!candidate.configure(std::move(transmission_edges))) {
+			return false;
+		}
+
+		electricity_grid = grid;
+		electricity_transmission_graph = std::move(candidate);
+		electricity_connections = std::move(connections);
+		electricity_grid_configured = true;
+		return true;
+	}
+
+	[[nodiscard]] bool set_upstream_electricity_generation(
+		fixed_point_t available_generation_per_tick
+	) {
+		if (
+			!electricity_grid_configured ||
+			available_generation_per_tick < fixed_point_t::_0
+		) {
+			return false;
+		}
+
+		electricity_grid.available_generation_per_tick =
+			available_generation_per_tick;
+		return true;
+	}
+
+	[[nodiscard]] bool set_upstream_electricity_edge_open(
+		std::string_view edge_id,
+		bool open
+	) {
+		return electricity_grid_configured &&
+			electricity_transmission_graph.set_edge_open(
+				edge_id,
+				open
+			);
+	}
 
 	[[nodiscard]] bool configure_upstream_site_utility_requirements(
 		std::vector<ProductiveSiteUtilityRequirement> requirements

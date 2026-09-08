@@ -2272,3 +2272,218 @@ TEST_CASE(
 	);
 	CHECK(full->upstream.actual_output == fixed_point_t { 4 });
 }
+
+TEST_CASE(
+	"Shared electricity grid prevents generation and transmission double spending",
+	"[economy][utilities][electricity-grid][b9]"
+) {
+	LiveEconomyFixture fixture;
+
+	AggregateProducer first {
+		"grid-site-a",
+		*fixture.upstream_process,
+		fixed_point_t { 4 },
+		fixed_point_t::_1
+	};
+	AggregateProducer second {
+		"grid-site-b",
+		*fixture.upstream_process,
+		fixed_point_t { 4 },
+		fixed_point_t::_1
+	};
+
+	std::vector<ProductiveSiteUtilityTarget> targets {
+		{ .employer_id = "grid-site-a", .producer = &first },
+		{ .employer_id = "grid-site-b", .producer = &second }
+	};
+
+	std::vector<ProductiveSiteUtilityRequirement> requirements {
+		{
+			.employer_id = "grid-site-a",
+			.kind = ProductiveSiteUtilityKind::Electricity,
+			.required_per_output = fixed_point_t::_1,
+			.available_per_tick = fixed_point_t::_0
+		},
+		{
+			.employer_id = "grid-site-b",
+			.kind = ProductiveSiteUtilityKind::Electricity,
+			.required_per_output = fixed_point_t::_1,
+			.available_per_tick = fixed_point_t::_0
+		}
+	};
+
+	LogisticsGraph transmission;
+	REQUIRE(
+		transmission.configure(
+			{
+				LogisticsGraphEdge {
+					.edge_id = "shared-line",
+					.source = market_node_index_t { 0 },
+					.destination = market_node_index_t { 1 },
+					.leg = TransportLeg {
+						.nominal_capacity = fixed_point_t { 6 }
+					}
+				},
+				LogisticsGraphEdge {
+					.edge_id = "site-a-line",
+					.source = market_node_index_t { 1 },
+					.destination = market_node_index_t { 10 },
+					.leg = TransportLeg {
+						.nominal_capacity = fixed_point_t { 4 }
+					}
+				},
+				LogisticsGraphEdge {
+					.edge_id = "site-b-line",
+					.source = market_node_index_t { 1 },
+					.destination = market_node_index_t { 20 },
+					.leg = TransportLeg {
+						.nominal_capacity = fixed_point_t { 4 }
+					}
+				}
+			}
+		)
+	);
+
+	auto allocations = ProductiveSiteElectricityGridResolver::resolve(
+		ProductiveSiteElectricityGridState {
+			.source_node = market_node_index_t { 0 },
+			.available_generation_per_tick = fixed_point_t { 6 }
+		},
+		transmission,
+		{
+			{
+				.employer_id = "grid-site-a",
+				.destination_node = market_node_index_t { 10 }
+			},
+			{
+				.employer_id = "grid-site-b",
+				.destination_node = market_node_index_t { 20 }
+			}
+		},
+		targets,
+		requirements
+	);
+
+	REQUIRE(allocations.size() == 2);
+	CHECK(allocations[0].requested == fixed_point_t { 4 });
+	CHECK(allocations[1].requested == fixed_point_t { 4 });
+	CHECK(allocations[0].delivered == fixed_point_t { 3 });
+	CHECK(allocations[1].delivered == fixed_point_t { 3 });
+	CHECK(requirements[0].available_per_tick == fixed_point_t { 3 });
+	CHECK(requirements[1].available_per_tick == fixed_point_t { 3 });
+
+	// Generation becomes tighter than transmission: the same two loads
+	// proportionally share one finite generation pool.
+	allocations = ProductiveSiteElectricityGridResolver::resolve(
+		ProductiveSiteElectricityGridState {
+			.source_node = market_node_index_t { 0 },
+			.available_generation_per_tick = fixed_point_t { 4 }
+		},
+		transmission,
+		{
+			{
+				.employer_id = "grid-site-a",
+				.destination_node = market_node_index_t { 10 }
+			},
+			{
+				.employer_id = "grid-site-b",
+				.destination_node = market_node_index_t { 20 }
+			}
+		},
+		targets,
+		requirements
+	);
+
+	CHECK(allocations[0].transmission_allocated == fixed_point_t { 3 });
+	CHECK(allocations[1].transmission_allocated == fixed_point_t { 3 });
+	CHECK(allocations[0].delivered == fixed_point_t { 2 });
+	CHECK(allocations[1].delivered == fixed_point_t { 2 });
+}
+
+TEST_CASE(
+	"Runtime electricity grid drives productive-site utility ceiling",
+	"[economy][utilities][electricity-grid][runtime][b9]"
+) {
+	LiveEconomyFixture fixture;
+	GoodInstanceManager goods { fixture.definitions, fixture.rules };
+	auto scenario = fixture.make_scenario();
+	LiveEconomyRuntime runtime { fixture.rules, goods, scenario };
+
+	REQUIRE(
+		runtime.configure_upstream_site_utility_requirements(
+			{
+				ProductiveSiteUtilityRequirement {
+					.employer_id = "site:primary",
+					.kind = ProductiveSiteUtilityKind::Electricity,
+					.required_per_output = fixed_point_t::_1,
+					.available_per_tick = fixed_point_t::_0
+				}
+			}
+		)
+	);
+
+	REQUIRE(
+		runtime.configure_upstream_electricity_grid(
+			ProductiveSiteElectricityGridState {
+				.source_node = market_node_index_t { 0 },
+				.available_generation_per_tick = fixed_point_t { 2 }
+			},
+			{
+				LogisticsGraphEdge {
+					.edge_id = "primary-grid-line",
+					.source = market_node_index_t { 0 },
+					.destination = market_node_index_t { 10 },
+					.leg = TransportLeg {
+						.nominal_capacity = fixed_point_t { 4 }
+					}
+				}
+			},
+			{
+				ProductiveSiteElectricityConnection {
+					.employer_id = "site:primary",
+					.destination_node = market_node_index_t { 10 }
+				}
+			}
+		)
+	);
+
+	GoodInstance& intermediate_market =
+		goods.get_good_instance_by_definition(*fixture.intermediate);
+
+	auto cycle = [&]() {
+		runtime.pre_market_daily_tick();
+		execute_intermediate_market(intermediate_market);
+		runtime.post_market_daily_tick();
+	};
+
+	cycle();
+	auto limited = runtime.get_latest_provenance();
+	REQUIRE(limited.has_value());
+	CHECK(limited->upstream.external_limited);
+	CHECK(limited->upstream.actual_output == fixed_point_t { 2 });
+
+	REQUIRE(
+		runtime.set_upstream_electricity_generation(
+			fixed_point_t { 4 }
+		)
+	);
+
+	cycle();
+	auto restored = runtime.get_latest_provenance();
+	REQUIRE(restored.has_value());
+	CHECK_FALSE(restored->upstream.external_limited);
+	CHECK(restored->upstream.actual_output == fixed_point_t { 4 });
+
+	REQUIRE(
+		runtime.set_upstream_electricity_edge_open(
+			"primary-grid-line",
+			false
+		)
+	);
+
+	cycle();
+	auto outage = runtime.get_latest_provenance();
+	REQUIRE(outage.has_value());
+	CHECK(outage->upstream.external_limited);
+	CHECK(outage->upstream.actual_output == fixed_point_t::_0);
+}
