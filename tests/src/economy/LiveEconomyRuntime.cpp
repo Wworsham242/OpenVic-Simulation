@@ -40,6 +40,7 @@ namespace {
 
 		GoodCategory const* category = nullptr;
 		GoodDefinition const* feedstock = nullptr;
+		GoodDefinition const* feedstock_b = nullptr;
 		GoodDefinition const* intermediate = nullptr;
 		GoodDefinition const* final_good = nullptr;
 
@@ -47,15 +48,22 @@ namespace {
 		std::optional<ProductionType> downstream_process;
 
 		LiveEconomyFixture(
-			memory::vector<Job> jobs = {}, pop_size_t workforce = pop_size_t { 0 },
-			ProductionType::template_type_t type = ProductionType::template_type_t::FACTORY
+			memory::vector<Job> jobs = {},
+			pop_size_t workforce = pop_size_t { 0 },
+			ProductionType::template_type_t type =
+				ProductionType::template_type_t::FACTORY,
+			bool include_secondary_feedstock = false
 		) {
-			REQUIRE(definitions.add_good_category("live", 3));
+			REQUIRE(definitions.add_good_category("live", 4));
 			category = definitions.get_good_category_by_identifier("live");
 			REQUIRE(category != nullptr);
 
 			REQUIRE(definitions.add_good_definition(
 				"feedstock", colour_rgb_t {}, *const_cast<GoodCategory*>(category),
+				fixed_point_t::_1, true, true, false, false
+			));
+			REQUIRE(definitions.add_good_definition(
+				"feedstock_b", colour_rgb_t {}, *const_cast<GoodCategory*>(category),
 				fixed_point_t::_1, true, true, false, false
 			));
 			REQUIRE(definitions.add_good_definition(
@@ -68,15 +76,20 @@ namespace {
 			));
 
 			feedstock = definitions.get_good_definition_by_identifier("feedstock");
+			feedstock_b = definitions.get_good_definition_by_identifier("feedstock_b");
 			intermediate = definitions.get_good_definition_by_identifier("intermediate");
 			final_good = definitions.get_good_definition_by_identifier("final");
 
 			REQUIRE(feedstock != nullptr);
+			REQUIRE(feedstock_b != nullptr);
 			REQUIRE(intermediate != nullptr);
 			REQUIRE(final_good != nullptr);
 
 			fixed_point_map_t<GoodDefinition const*> upstream_inputs;
 			upstream_inputs.emplace(feedstock, fixed_point_t::_1);
+			if (include_secondary_feedstock) {
+				upstream_inputs.emplace(feedstock_b, fixed_point_t { 2 });
+			}
 
 			upstream_process.emplace(
 				rules,
@@ -1152,7 +1165,7 @@ producer_allocated = allocation.allocated;
 }
 }
 
-// Building level 2 × capacity-per-level 2 × base workforce 10.
+// Building level 2 Ã— capacity-per-level 2 Ã— base workforce 10.
 CHECK(requested == fixed_point_t { 40 });
 CHECK(producer_allocated == fixed_point_t { 40 });
 
@@ -1971,4 +1984,185 @@ TEST_CASE(
                 == open.primary_output
         );
         CHECK(disrupted.source_unmet == open.primary_output);
+}
+
+TEST_CASE(
+	"Multiple physical input goods constrain one productive site independently",
+	"[economy][productive-site][multi-input][logistics][inventory][b7]"
+) {
+	LiveEconomyFixture fixture {
+		{},
+		pop_size_t { 0 },
+		ProductionType::template_type_t::PROCESS,
+		true
+	};
+
+	GoodInstanceManager good_instances {
+		fixture.definitions,
+		fixture.rules
+	};
+
+	LiveEconomyScenarioDefinition scenario = fixture.make_scenario();
+	REQUIRE(scenario.is_valid());
+
+	LiveEconomyRuntime runtime {
+		fixture.rules,
+		good_instances,
+		scenario
+	};
+
+	REQUIRE(
+		runtime.configure_additional_upstream_resource_input(
+			*fixture.feedstock_b,
+			fixed_point_t { 8 },
+			market_node_index_t { 0 }
+		)
+	);
+
+	CHECK(runtime.get_additional_upstream_resource_input_count() == 1);
+
+	REQUIRE(
+		runtime.configure_logistics_graph(
+			{
+				LogisticsGraphEdge {
+					.edge_id = "primary_input_path",
+					.source = market_node_index_t { 0 },
+					.destination = market_node_index_t { 10 },
+					.leg = TransportLeg {
+						.nominal_capacity = fixed_point_t { 8 },
+						.availability_fraction = fixed_point_t::_1,
+						.open = true
+					}
+				},
+				LogisticsGraphEdge {
+					.edge_id = "secondary_input_path",
+					.source = market_node_index_t { 0 },
+					.destination = market_node_index_t { 20 },
+					.leg = TransportLeg {
+						.nominal_capacity = fixed_point_t { 8 },
+						.availability_fraction = fixed_point_t::_1,
+						.open = true
+					}
+				}
+			}
+		)
+	);
+
+	REQUIRE(
+		runtime.configure_upstream_site_resource_routes(
+			{
+				ProductiveSiteResourceRoute {
+					.employer_id = "site:primary",
+					.source_node = market_node_index_t { 0 },
+					.destination_node = market_node_index_t { 10 },
+					.good = fixture.feedstock
+				},
+				ProductiveSiteResourceRoute {
+					.employer_id = "site:primary",
+					.source_node = market_node_index_t { 0 },
+					.destination_node = market_node_index_t { 20 },
+					.good = fixture.feedstock_b
+				}
+			}
+		)
+	);
+
+	GoodInstance& intermediate_market =
+		good_instances.get_good_instance_by_definition(
+			*fixture.intermediate
+		);
+
+	auto cycle = [&]() {
+		runtime.pre_market_daily_tick();
+		execute_intermediate_market(intermediate_market);
+		runtime.post_market_daily_tick();
+	};
+
+	cycle();
+
+	auto first = runtime.get_latest_provenance();
+	REQUIRE(first.has_value());
+	CHECK(first->upstream.actual_output == fixed_point_t { 4 });
+	REQUIRE(first->upstream.input_supported_output.has_value());
+	CHECK(
+		*first->upstream.input_supported_output ==
+			fixed_point_t { 4 }
+	);
+
+	AggregateProducer& producer =
+		runtime.get_upstream_producer_for_workforce_allocation();
+
+	CHECK(
+		producer.get_inventory(*fixture.feedstock) ==
+			fixed_point_t::_0
+	);
+	CHECK(
+		producer.get_inventory(*fixture.feedstock_b) ==
+			fixed_point_t::_0
+	);
+
+	REQUIRE(
+		runtime.set_logistics_graph_edge_open(
+			"secondary_input_path",
+			false
+		)
+	);
+
+	cycle();
+
+	auto blocked = runtime.get_latest_provenance();
+	REQUIRE(blocked.has_value());
+	CHECK(blocked->upstream.actual_output == fixed_point_t::_0);
+	CHECK(blocked->upstream.input_limited);
+	REQUIRE(blocked->upstream.input_supported_output.has_value());
+	CHECK(
+		*blocked->upstream.input_supported_output ==
+			fixed_point_t::_0
+	);
+
+	CHECK(
+		producer.get_inventory(*fixture.feedstock) ==
+			fixed_point_t { 4 }
+	);
+	CHECK(
+		producer.get_inventory(*fixture.feedstock_b) ==
+			fixed_point_t::_0
+	);
+
+	REQUIRE(
+		runtime.set_logistics_graph_edge_open(
+			"secondary_input_path",
+			true
+		)
+	);
+
+	REQUIRE(
+		runtime.set_additional_upstream_resource_availability(
+			*fixture.feedstock_b,
+			fixed_point_t::_1 / fixed_point_t { 2 }
+		)
+	);
+
+	cycle();
+
+	auto scarce = runtime.get_latest_provenance();
+	REQUIRE(scarce.has_value());
+	CHECK(scarce->upstream.actual_output == fixed_point_t { 2 });
+	CHECK(scarce->upstream.input_limited);
+	REQUIRE(scarce->upstream.input_supported_output.has_value());
+	CHECK(
+		*scarce->upstream.input_supported_output ==
+			fixed_point_t { 2 }
+	);
+
+	CHECK(
+		producer.get_inventory(*fixture.feedstock) ==
+			fixed_point_t { 2 }
+	);
+	CHECK(
+		producer.get_inventory(*fixture.feedstock_b) ==
+			fixed_point_t::_0
+	);
+
+	CHECK(runtime.get_status().upstream_output == fixed_point_t { 2 });
 }
