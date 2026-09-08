@@ -1,5 +1,7 @@
 #pragma once
 
+#include <memory>
+
 #include <optional>
 #include <string>
 #include <string_view>
@@ -19,6 +21,7 @@
 #include "openvic-simulation/economy/trading/SharedTransportCapacity.hpp"
 #include "openvic-simulation/economy/trading/TransportCorridor.hpp"
 #include "openvic-simulation/misc/GameRulesManager.hpp"
+#include "openvic-simulation/map/MapInstance.hpp"
 #include "openvic-simulation/resources/ResourceSupply.hpp"
 #include "openvic-simulation/resources/ResourceSupplyNetwork.hpp"
 
@@ -114,7 +117,63 @@ private:
 	GoodInstanceManager& good_instance_manager;
 	LiveEconomyScenarioDefinition const& scenario;
 
-	ResourceSupplyNetwork source_network;
+    struct BoundUpstreamSiteState final {
+        ProductiveSiteBinding binding;
+        std::string employer_id;
+        AggregateProducer producer;
+        AggregateProducerMarketBridge bridge;
+
+        fixed_point_t requested_workforce = fixed_point_t::_0;
+        std::optional<WorkforceAllocationResult> current_allocation;
+        std::optional<WorkforceAllocationResult> previous_allocation;
+        AggregateProductionResult last_production {};
+        AggregateMarketCycleResult last_market {};
+
+        static std::string make_employer_id(
+            ProductiveSiteBinding const& binding
+        ) {
+            std::string result = "site:";
+            result += binding.province_id;
+            result += ":";
+            result += binding.building_id;
+            return result;
+        }
+
+        BoundUpstreamSiteState(
+            ProductiveSiteBinding new_binding,
+            ProductionType const& production_type,
+            fixed_point_t utilization
+        ) :
+            binding { std::move(new_binding) },
+            employer_id { make_employer_id(binding) },
+            producer {
+                employer_id,
+                production_type,
+                fixed_point_t::_0,
+                utilization
+            },
+            bridge { producer } {}
+
+        [[nodiscard]] fixed_point_t get_labor_offer(
+            fixed_point_t no_history_offer = fixed_point_t::_1
+        ) const {
+            if (
+                !previous_allocation.has_value() ||
+                previous_allocation->allocated < fixed_point_t::_1
+            ) {
+                return no_history_offer;
+            }
+
+            fixed_point_t const operating_surplus = std::max(
+                last_market.money_received - last_market.money_spent,
+                fixed_point_t::_0
+            );
+
+            return operating_surplus / previous_allocation->allocated;
+        }
+    };
+
+    ResourceSupplyNetwork source_network;
 	std::vector<ResourceSourceRoute> resource_routes;
 	std::vector<ResourceAlternativeRoute> alternative_resource_routes;
 	LogisticsGraph logistics_graph;
@@ -138,7 +197,14 @@ private:
 	std::optional<LiveEconomyCycleProvenance> pending_provenance;
 	std::optional<LiveEconomyCycleProvenance> completed_provenance;
 	std::optional<ProductiveSiteBinding> upstream_site;
-	std::optional<WorkforceAllocationResult> preallocated_upstream_workforce;
+    std::string upstream_employer_id;
+    fixed_point_t upstream_requested_workforce = fixed_point_t::_0;
+    std::optional<WorkforceAllocationResult> preallocated_upstream_workforce;
+
+    // Stable-address ownership is required because each market bridge
+    // retains an AggregateProducer&.
+    std::vector<std::unique_ptr<BoundUpstreamSiteState>>
+        additional_upstream_sites;
 
 	[[nodiscard]] std::vector<ResourceSourceAccess> build_resource_source_access() const {
 		std::vector<ResourceSourceAccess> access;
@@ -262,8 +328,123 @@ private:
 			market.get_quantity_traded_yesterday();
 	}
 
-public:
-	// Migration mapping only: SimTime itself remains unitless.
+    void distribute_source_flow_across_upstream_sites(
+            fixed_point_t delivered
+    ) {
+            if (delivered <= fixed_point_t::_0) {
+                    return;
+            }
+
+            struct source_target_t final {
+                    std::string_view employer_id;
+                    AggregateProducer* producer = nullptr;
+                    fixed_point_t shortfall = fixed_point_t::_0;
+                    fixed_point_t allocated = fixed_point_t::_0;
+            };
+
+            std::vector<source_target_t> targets;
+
+            targets.push_back(source_target_t {
+                    .employer_id = upstream_employer_id.empty()
+                            ? std::string_view { "site:primary" }
+                            : std::string_view { upstream_employer_id },
+                    .producer = &upstream,
+                    .shortfall =
+                            upstream_bridge.calculate_input_shortfall(
+                                    *scenario.source_inflow_good
+                            )
+            });
+
+            for (auto const& site : additional_upstream_sites) {
+                    targets.push_back(source_target_t {
+                            .employer_id = site->employer_id,
+                            .producer = &site->producer,
+                            .shortfall =
+                                    site->bridge.calculate_input_shortfall(
+                                            *scenario.source_inflow_good
+                                    )
+                    });
+            }
+
+            std::sort(
+                    targets.begin(),
+                    targets.end(),
+                    [](source_target_t const& lhs, source_target_t const& rhs) {
+                            return lhs.employer_id < rhs.employer_id;
+                    }
+            );
+
+            fixed_point_t total_shortfall = fixed_point_t::_0;
+
+            for (source_target_t const& target : targets) {
+                    total_shortfall += target.shortfall;
+            }
+
+            if (total_shortfall <= fixed_point_t::_0) {
+                    upstream.add_inventory(
+                            *scenario.source_inflow_good,
+                            delivered
+                    );
+                    return;
+            }
+
+            fixed_point_t remaining = delivered;
+
+            // Proportional allocation prevents collection-order privilege.
+            for (source_target_t& target : targets) {
+                    if (target.shortfall <= fixed_point_t::_0) {
+                            continue;
+                    }
+
+                    fixed_point_t const share = std::min(
+                            target.shortfall,
+                            delivered * target.shortfall / total_shortfall
+                    );
+
+                    target.producer->add_inventory(
+                            *scenario.source_inflow_good,
+                            share
+                    );
+
+                    target.allocated += share;
+                    remaining -= share;
+            }
+
+            // Resolve fixed-point residue deterministically by employer id.
+            for (source_target_t& target : targets) {
+                    if (remaining <= fixed_point_t::_0) {
+                            break;
+                    }
+
+                    fixed_point_t const unmet = std::max(
+                            target.shortfall - target.allocated,
+                            fixed_point_t::_0
+                    );
+
+                    fixed_point_t const extra =
+                            std::min(unmet, remaining);
+
+                    if (extra > fixed_point_t::_0) {
+                            target.producer->add_inventory(
+                                    *scenario.source_inflow_good,
+                                    extra
+                            );
+
+                            target.allocated += extra;
+                            remaining -= extra;
+                    }
+            }
+
+            // Conserve any excess physical supply as inventory.
+            if (remaining > fixed_point_t::_0) {
+                    upstream.add_inventory(
+                            *scenario.source_inflow_good,
+                            remaining
+                    );
+            }
+    }
+
+public:// Migration mapping only: SimTime itself remains unitless.
 	static constexpr Cadence DAILY_CADENCE = *Cadence::create(24);
 
 	LiveEconomyRuntime(
@@ -369,11 +550,235 @@ WorkforceAllocationResult allocation
 ) {
 preallocated_upstream_workforce = allocation;
 }
-	[[nodiscard]] bool bind_upstream_site(ProductiveSiteBinding binding, MapInstance& map) {
-		if (!binding.resolve(map, upstream.get_production_type())) { return false; }
-		upstream_site = std::move(binding);
-		return true;
-	}
+	[[nodiscard]] bool bind_upstream_site(
+            ProductiveSiteBinding binding,
+            MapInstance& map
+    ) {
+            if (!binding.resolve(map, upstream.get_production_type())) {
+                    return false;
+            }
+
+            upstream_employer_id =
+                    BoundUpstreamSiteState::make_employer_id(binding);
+
+            for (auto const& site : additional_upstream_sites) {
+                    if (site->employer_id == upstream_employer_id) {
+                            return false;
+                    }
+            }
+
+            upstream_site = std::move(binding);
+            return true;
+    }
+
+    [[nodiscard]] bool bind_additional_upstream_site(
+            ProductiveSiteBinding binding,
+            MapInstance& map
+    ) {
+            if (!binding.resolve(map, upstream.get_production_type())) {
+                    return false;
+            }
+
+            std::string const employer_id =
+                    BoundUpstreamSiteState::make_employer_id(binding);
+
+            if (
+                    !upstream_employer_id.empty() &&
+                    employer_id == upstream_employer_id
+            ) {
+                    return false;
+            }
+
+            for (auto const& site : additional_upstream_sites) {
+                    if (site->employer_id == employer_id) {
+                            return false;
+                    }
+            }
+
+            additional_upstream_sites.push_back(
+                    std::make_unique<BoundUpstreamSiteState>(
+                            std::move(binding),
+                            upstream.get_production_type(),
+                            scenario.upstream_utilization
+                    )
+            );
+
+            // The vector moves unique_ptrs, not the site objects themselves.
+            std::sort(
+                    additional_upstream_sites.begin(),
+                    additional_upstream_sites.end(),
+                    [](auto const& lhs, auto const& rhs) {
+                            return lhs->employer_id < rhs->employer_id;
+                    }
+            );
+
+            return true;
+    }
+
+    [[nodiscard]] size_t get_additional_upstream_site_count() const {
+            return additional_upstream_sites.size();
+    }
+
+    [[nodiscard]] AggregateProductionResult const*
+    get_additional_upstream_last_production(size_t index) const {
+            return index < additional_upstream_sites.size()
+                    ? &additional_upstream_sites[index]->last_production
+                    : nullptr;
+    }
+
+    [[nodiscard]] AggregateMarketCycleResult const*
+    get_additional_upstream_last_market(size_t index) const {
+            return index < additional_upstream_sites.size()
+                    ? &additional_upstream_sites[index]->last_market
+                    : nullptr;
+    }
+
+    [[nodiscard]] std::optional<WorkforceAllocationResult>
+    get_additional_upstream_previous_workforce(size_t index) const {
+            return index < additional_upstream_sites.size()
+                    ? additional_upstream_sites[index]->previous_allocation
+                    : std::nullopt;
+    }
+
+    [[nodiscard]] std::vector<ProvinceWorkforceEmployerRequests>
+    prepare_upstream_employer_requests(MapInstance& map) {
+            std::vector<ProvinceWorkforceEmployerRequests> groups;
+
+            if (upstream_site.has_value()) {
+                    auto resolved = upstream_site->resolve(
+                            map,
+                            upstream.get_production_type()
+                    );
+
+                    if (!resolved.has_value()) {
+                            upstream.set_capacity(fixed_point_t::_0);
+                            upstream.set_available_workforce(fixed_point_t::_0);
+                            upstream_requested_workforce = fixed_point_t::_0;
+                    } else {
+                            upstream.set_capacity(resolved->installed_capacity);
+                            upstream.set_available_workforce(fixed_point_t::_0);
+
+                            WorkforceEmployerRequest request =
+                                    make_producer_workforce_request(
+                                            upstream,
+                                            upstream_employer_id,
+                                            get_upstream_labor_offer()
+                                    );
+
+                            upstream_requested_workforce = request.requested;
+
+                            groups.push_back(
+                                    ProvinceWorkforceEmployerRequests {
+                                            .province_id =
+                                                    upstream_site->province_id,
+                                            .employers = { request }
+                                    }
+                            );
+                    }
+            }
+
+            for (auto& site : additional_upstream_sites) {
+                    auto resolved = site->binding.resolve(
+                            map,
+                            site->producer.get_production_type()
+                    );
+
+                    if (!resolved.has_value()) {
+                            site->producer.set_capacity(fixed_point_t::_0);
+                            site->producer.set_available_workforce(
+                                    fixed_point_t::_0
+                            );
+                            site->requested_workforce = fixed_point_t::_0;
+                            site->current_allocation =
+                                    WorkforceAllocationResult {};
+                            continue;
+                    }
+
+                    site->producer.set_capacity(
+                            resolved->installed_capacity
+                    );
+                    site->producer.set_available_workforce(
+                            fixed_point_t::_0
+                    );
+
+                    WorkforceEmployerRequest request =
+                            make_producer_workforce_request(
+                                    site->producer,
+                                    site->employer_id,
+                                    site->get_labor_offer()
+                            );
+
+                    site->requested_workforce = request.requested;
+
+                    groups.push_back(
+                            ProvinceWorkforceEmployerRequests {
+                                    .province_id =
+                                            site->binding.province_id,
+                                    .employers = { request }
+                            }
+                    );
+            }
+
+            return groups;
+    }
+
+    void apply_upstream_employer_allocations(
+            std::vector<WorkforceEmployerAllocation> const& allocations
+    ) {
+            if (upstream_site.has_value()) {
+                    preallocated_upstream_workforce =
+                            WorkforceAllocationResult {
+                                    .requested =
+                                            upstream_requested_workforce,
+                                    .allocated = fixed_point_t::_0
+                            };
+            }
+
+            for (auto& site : additional_upstream_sites) {
+                    site->current_allocation =
+                            WorkforceAllocationResult {
+                                    .requested =
+                                            site->requested_workforce,
+                                    .allocated = fixed_point_t::_0
+                            };
+            }
+
+            for (
+                    WorkforceEmployerAllocation const& allocation :
+                    allocations
+            ) {
+                    if (
+                            upstream_site.has_value() &&
+                            allocation.employer_id ==
+                                    upstream_employer_id
+                    ) {
+                            preallocated_upstream_workforce =
+                                    WorkforceAllocationResult {
+                                            .requested =
+                                                    upstream_requested_workforce,
+                                            .allocated =
+                                                    allocation.allocated
+                                    };
+                            continue;
+                    }
+
+                    for (auto& site : additional_upstream_sites) {
+                            if (
+                                    allocation.employer_id ==
+                                    site->employer_id
+                            ) {
+                                    site->current_allocation =
+                                            WorkforceAllocationResult {
+                                                    .requested =
+                                                            site->requested_workforce,
+                                                    .allocated =
+                                                            allocation.allocated
+                                            };
+                                    break;
+                            }
+                    }
+            }
+    }
 
 	// Called by the A6 prepare callback after map_tick: province-local labor
 	// is post-RGO residual unemployment during this migration, not a permanent
@@ -559,7 +964,11 @@ preallocated_upstream_workforce = allocation;
 			pending_provenance->intermediate_good_id = intermediate_good.get_identifier();
 		}
 		upstream_bridge.reset_cycle_result();
-		downstream_bridge.reset_cycle_result();
+            downstream_bridge.reset_cycle_result();
+
+            for (auto& site : additional_upstream_sites) {
+                    site->bridge.reset_cycle_result();
+            }
 		if (upstream_pops.has_value()) {
 WorkforceAllocationResult allocation;
 (void)allocate_producer_workforce_from_pool(
@@ -585,20 +994,39 @@ preallocated_upstream_workforce.reset();
 		status.source_buffer_draw = source_flow.buffer_draw;
 		status.source_unmet_inflow = source_flow.unmet;
 
-		upstream.add_inventory(
-			*scenario.source_inflow_good,
-			source_flow.delivered
-		);
+		distribute_source_flow_across_upstream_sites(
+                    source_flow.delivered
+            );
 
-		const AggregateProductionResult upstream_result = upstream.produce();
-		status.upstream_output = upstream_result.actual_output;
+            const AggregateProductionResult upstream_result =
+                    upstream.produce();
+
+            fixed_point_t total_upstream_output =
+                    upstream_result.actual_output;
+
+            for (auto& site : additional_upstream_sites) {
+                    site->last_production =
+                            site->producer.produce();
+
+                    total_upstream_output +=
+                            site->last_production.actual_output;
+            }
+
+            status.upstream_output = total_upstream_output;
 		if (pending_provenance) {
 			pending_provenance->resource = source_flow;
 			pending_provenance->upstream = upstream_result;
 		}
 
-		const fixed_point_t physical_intermediate =
-			upstream.get_inventory(intermediate_good);
+		fixed_point_t physical_intermediate =
+                    upstream.get_inventory(intermediate_good);
+
+            for (auto const& site : additional_upstream_sites) {
+                    physical_intermediate +=
+                            site->producer.get_inventory(
+                                    intermediate_good
+                            );
+            }
 
 		corridor.publish_access(
 			access_table,
@@ -620,11 +1048,23 @@ preallocated_upstream_workforce.reset();
 			good_instance_manager.get_good_instance_by_definition(intermediate_good);
 
 		if (auto sell_order = upstream_bridge.make_output_sell_order();
-			sell_order.has_value()) {
-			market.add_market_sell_order(std::move(*sell_order));
-		}
+                    sell_order.has_value()) {
+                    market.add_market_sell_order(std::move(*sell_order));
+            }
 
-		const fixed_point_t shortfall =
+            for (auto& site : additional_upstream_sites) {
+                    if (
+                            auto sell_order =
+                                    site->bridge.make_output_sell_order();
+                            sell_order.has_value()
+                    ) {
+                            market.add_market_sell_order(
+                                    std::move(*sell_order)
+                            );
+                    }
+            }
+
+            const fixed_point_t shortfall =
 			downstream_bridge.calculate_input_shortfall(intermediate_good);
 
 		if (auto buy_order = downstream_bridge.make_input_buy_order(
@@ -641,9 +1081,21 @@ preallocated_upstream_workforce.reset();
 
 	void post_market_daily_tick() {
 		upstream_bridge.clear_completed_orders();
-		downstream_bridge.clear_completed_orders();
+            downstream_bridge.clear_completed_orders();
 
-		const AggregateProductionResult downstream_result = downstream.produce();
+            for (auto& site : additional_upstream_sites) {
+                    site->bridge.clear_completed_orders();
+
+                    site->last_market =
+                            site->bridge.get_cycle_result();
+
+                    site->previous_allocation =
+                            site->current_allocation;
+
+                    site->current_allocation.reset();
+            }
+
+            const AggregateProductionResult downstream_result = downstream.produce();
 
 		status.downstream_desired_output =
 			downstream_result.desired_output;

@@ -901,14 +901,39 @@ namespace {
 		uint64_t clearings = 0;
 
 		BoundWorldFixture() {
-			BuildingType::building_type_args_t args;
-			args.type = "productive_site";
-			args.in_province = true;
-			args.capacity_per_level = 2;
-			args.max_level = building_level_t { 5 };
-			args.production_type = &*economy.upstream_process;
-			REQUIRE(population.buildings.add_building_type("plant", args));
-			population.buildings.lock_building_types();
+			// province_building_types stores references into the building registry,
+                 // so reserve before inserting multiple manually-created types.
+                 population.buildings.reserve_more_building_types(2);
+
+                 BuildingType::building_type_args_t primary_args;
+                 primary_args.type = "productive_site";
+                 primary_args.in_province = true;
+                 primary_args.capacity_per_level = 2;
+                 primary_args.max_level = building_level_t { 5 };
+                 primary_args.production_type = &*economy.upstream_process;
+
+                 BuildingType::building_type_args_t secondary_args;
+                 secondary_args.type = "productive_site";
+                 secondary_args.in_province = true;
+                 secondary_args.capacity_per_level = 2;
+                 secondary_args.max_level = building_level_t { 5 };
+                 secondary_args.production_type = &*economy.upstream_process;
+
+                 REQUIRE(
+                         population.buildings.add_building_type(
+                                 "plant",
+                                 primary_args
+                         )
+                 );
+
+                 REQUIRE(
+                         population.buildings.add_building_type(
+                                 "plant_b",
+                                 secondary_args
+                         )
+                 );
+
+                 population.buildings.lock_building_types();
 			REQUIRE(definition.set_max_provinces(province_index_t { 2 }));
 			REQUIRE(definition.add_province_definition("1", colour_t { 1, 2, 3 }));
 			REQUIRE(definition.add_province_definition("2", colour_t { 4, 5, 6 }));
@@ -932,24 +957,58 @@ namespace {
 			REQUIRE(result != nullptr);
 			return *result;
 		}
+
+         BuildingInstance& plant_b() {
+                 auto* result =
+                         province("1").get_mutable_building_by_identifier("plant_b");
+                 REQUIRE(result != nullptr);
+                 return *result;
+         }
 		void replace_population(std::string_view id, int size) {
 			auto& location = province(id);
 			location.get_mutable_pops().clear();
 			location.get_mutable_pops().emplace(population.make_pop(population.eligible, size, 1, &location));
 		}
 		void cycle() {
-			auto previous = timeline.current_time();
-			REQUIRE(timeline.advance(24));
-			// Fresh authoritative POPs in this fixture represent prepared daily
-			// availability. Production uses the same post-map resolver as InstanceManager.
-			runtime.run_due_daily_cycles(previous, timeline.current_time(),
-				[&](SimTime) { return runtime.prepare_upstream_site(*map); },
-				[&]() {
-					++clearings;
-					execute_intermediate_market(goods.get_good_instance_by_definition(*economy.intermediate));
-				}
-			);
-		}
+                 auto previous = timeline.current_time();
+                 REQUIRE(timeline.advance(24));
+
+                 // Match InstanceManager: one prepared POP pool, one province-wide
+                 // allocation authority containing RGO + every bound productive site.
+                 map->prepare_employment_phase();
+
+                 auto employer_requests =
+                         runtime.prepare_upstream_employer_requests(*map);
+
+                 auto allocations =
+                         map->allocate_employment_phase(
+                                 std::move(employer_requests)
+                         );
+
+                 runtime.apply_upstream_employer_allocations(
+                         allocations
+                 );
+
+                 map->finish_rgo_production();
+
+                 runtime.run_due_daily_cycles(
+                         previous,
+                         timeline.current_time(),
+                         [&](SimTime) -> std::optional<WorkforcePool> {
+                                 // Workers have already been committed through Pop::hire().
+                                 // A second pool here would constitute a second hiring pass.
+                                 return std::nullopt;
+                         },
+                         [&]() {
+                                 ++clearings;
+                                 execute_intermediate_market(
+                                         goods.get_good_instance_by_definition(
+                                                 *economy.intermediate
+                                         )
+                                 );
+                         }
+                 );
+         }
 	};
 }
 
@@ -1432,3 +1491,237 @@ forward.assigned_a + forward.assigned_b
 CHECK(reverse == forward);
 }
 
+
+TEST_CASE(
+"Real bound productive sites share one province workforce and market deterministically",
+"[economy][productive-site][world][multi-site][employment-authority][determinism]"
+) {
+        struct Result final {
+                fixed_point_t primary_allocated = fixed_point_t::_0;
+                fixed_point_t secondary_allocated = fixed_point_t::_0;
+                fixed_point_t primary_output = fixed_point_t::_0;
+                fixed_point_t secondary_output = fixed_point_t::_0;
+                fixed_point_t primary_sold = fixed_point_t::_0;
+                fixed_point_t secondary_sold = fixed_point_t::_0;
+                fixed_point_t total_upstream_output = fixed_point_t::_0;
+                pop_size_t unemployed = 0;
+                uint64_t clearings = 0;
+
+                bool operator==(Result const&) const = default;
+        };
+
+        auto run = [](bool bind_secondary_first) {
+                BoundWorldFixture world;
+
+                world.plant().set_level(building_level_t { 2 });
+                world.plant_b().set_level(building_level_t { 2 });
+                world.replace_population("1", 60);
+
+                ProductiveSiteBinding secondary {
+                        "1",
+                        "plant_b",
+                        "live_upstream",
+                        LaborPoolScope::ProvinceLocal
+                };
+
+                // The primary was bound by the fixture constructor. To genuinely
+                // test opposite binding-call order, rebuild the runtime against the
+                // same world when requested.
+                if (bind_secondary_first) {
+                        LiveEconomyRuntime reordered_runtime {
+                                world.economy.rules,
+                                world.goods,
+                                world.scenario
+                        };
+
+                        REQUIRE(
+                                reordered_runtime.bind_additional_upstream_site(
+                                        secondary,
+                                        *world.map
+                                )
+                        );
+
+                        REQUIRE(
+                                reordered_runtime.bind_upstream_site(
+                                        world.binding,
+                                        *world.map
+                                )
+                        );
+
+                        world.map->prepare_employment_phase();
+
+                        auto requests =
+                                reordered_runtime.prepare_upstream_employer_requests(
+                                        *world.map
+                                );
+
+                        auto allocations =
+                                world.map->allocate_employment_phase(
+                                        std::move(requests)
+                                );
+
+                        reordered_runtime.apply_upstream_employer_allocations(
+                                allocations
+                        );
+
+                        world.map->finish_rgo_production();
+
+                        SimulationTimeline timeline;
+                        REQUIRE(timeline.advance(24));
+
+                        uint64_t clearings = 0;
+
+                        reordered_runtime.run_due_daily_cycles(
+                                SimTime { 0 },
+                                timeline.current_time(),
+                                [&](SimTime) -> std::optional<WorkforcePool> {
+                                        return std::nullopt;
+                                },
+                                [&]() {
+                                        ++clearings;
+                                        execute_intermediate_market(
+                                                world.goods.get_good_instance_by_definition(
+                                                        *world.economy.intermediate
+                                                )
+                                        );
+                                }
+                        );
+
+                        auto provenance =
+                                reordered_runtime.get_latest_provenance();
+
+                        REQUIRE(provenance.has_value());
+                        REQUIRE(provenance->workforce.has_value());
+
+                        auto secondary_workforce =
+                                reordered_runtime
+                                        .get_additional_upstream_previous_workforce(0);
+
+                        auto secondary_production =
+                                reordered_runtime
+                                        .get_additional_upstream_last_production(0);
+
+                        auto secondary_market =
+                                reordered_runtime
+                                        .get_additional_upstream_last_market(0);
+
+                        REQUIRE(secondary_workforce.has_value());
+                        REQUIRE(secondary_production != nullptr);
+                        REQUIRE(secondary_market != nullptr);
+
+                        return Result {
+                                .primary_allocated =
+                                        provenance->workforce->allocated,
+                                .secondary_allocated =
+                                        secondary_workforce->allocated,
+                                .primary_output =
+                                        provenance->upstream.actual_output,
+                                .secondary_output =
+                                        secondary_production->actual_output,
+                                .primary_sold =
+                                        provenance->upstream_market.output_sold,
+                                .secondary_sold =
+                                        secondary_market->output_sold,
+                                .total_upstream_output =
+                                        reordered_runtime
+                                                .get_status()
+                                                .upstream_output,
+                                .unemployed =
+                                        world.province("1")
+                                                .get_mutable_pops()
+                                                .begin()
+                                                ->get_unemployed(),
+                                .clearings = clearings
+                        };
+                }
+
+                REQUIRE(
+                        world.runtime.bind_additional_upstream_site(
+                                secondary,
+                                *world.map
+                        )
+                );
+
+                world.cycle();
+
+                auto provenance = world.runtime.get_latest_provenance();
+
+                REQUIRE(provenance.has_value());
+                REQUIRE(provenance->workforce.has_value());
+
+                auto secondary_workforce =
+                        world.runtime
+                                .get_additional_upstream_previous_workforce(0);
+
+                auto secondary_production =
+                        world.runtime
+                                .get_additional_upstream_last_production(0);
+
+                auto secondary_market =
+                        world.runtime
+                                .get_additional_upstream_last_market(0);
+
+                REQUIRE(secondary_workforce.has_value());
+                REQUIRE(secondary_production != nullptr);
+                REQUIRE(secondary_market != nullptr);
+
+                return Result {
+                        .primary_allocated =
+                                provenance->workforce->allocated,
+                        .secondary_allocated =
+                                secondary_workforce->allocated,
+                        .primary_output =
+                                provenance->upstream.actual_output,
+                        .secondary_output =
+                                secondary_production->actual_output,
+                        .primary_sold =
+                                provenance->upstream_market.output_sold,
+                        .secondary_sold =
+                                secondary_market->output_sold,
+                        .total_upstream_output =
+                                world.runtime.get_status().upstream_output,
+                        .unemployed =
+                                world.province("1")
+                                        .get_mutable_pops()
+                                        .begin()
+                                        ->get_unemployed(),
+                        .clearings = world.clearings
+                };
+        };
+
+        Result const primary_first = run(false);
+        Result const secondary_first = run(true);
+
+        // Two distinct real BuildingInstances consume the one 60-worker POP pool.
+        CHECK(primary_first.primary_allocated == fixed_point_t { 40 });
+        CHECK(primary_first.secondary_allocated == fixed_point_t { 20 });
+        CHECK(
+                primary_first.primary_allocated +
+                primary_first.secondary_allocated
+                == fixed_point_t { 60 }
+        );
+        CHECK(primary_first.unemployed == pop_size_t { 0 });
+
+        // Each producer can only produce from the workforce assigned to itself.
+        CHECK(primary_first.primary_output > fixed_point_t::_0);
+        CHECK(primary_first.secondary_output > fixed_point_t::_0);
+
+        // The finite source inflow is conserved rather than duplicated.
+        CHECK(
+                primary_first.total_upstream_output
+                == fixed_point_t { 4 }
+        );
+
+        // Both bridges participate independently in the same GoodMarket clear.
+        CHECK(primary_first.primary_sold > fixed_point_t::_0);
+        CHECK(primary_first.secondary_sold > fixed_point_t::_0);
+        CHECK(
+                primary_first.primary_sold +
+                primary_first.secondary_sold
+                == primary_first.total_upstream_output
+        );
+        CHECK(primary_first.clearings == 1);
+
+        // Binding-call order does not change authoritative outcomes.
+        CHECK(secondary_first == primary_first);
+}

@@ -212,91 +212,26 @@ live_economy_runtime->run_due_daily_cycles(
 previous_time,
 simulation_timeline.current_time(),
 [this](SimTime) -> std::optional<WorkforcePool> {
-auto workforce =
-live_economy_runtime->prepare_upstream_site(map_instance);
-
-ProductiveSiteBinding const* binding =
-live_economy_runtime->get_upstream_site_binding();
-
-if (!workforce.has_value() || binding == nullptr) {
-(void)map_instance.allocate_employment_phase();
-map_instance.finish_rgo_production();
-return std::nullopt;
-}
-
-ProvinceInstance* province =
-map_instance.get_province_instance_by_identifier(
-binding->province_id
+auto employer_requests =
+live_economy_runtime->prepare_upstream_employer_requests(
+map_instance
 );
 
-if (province == nullptr) {
-(void)map_instance.allocate_employment_phase();
-map_instance.finish_rgo_production();
-return std::nullopt;
-}
-
-AggregateProducer& producer =
-live_economy_runtime
-->get_upstream_producer_for_workforce_allocation();
-
-std::string const producer_employer_id =
-"site:" + binding->province_id + ":" +
-binding->building_id;
-
-fixed_point_t const producer_labor_offer =
-live_economy_runtime->get_upstream_labor_offer();
-
-WorkforceEmployerRequest producer_request =
-make_producer_workforce_request(
-producer,
-producer_employer_id,
-producer_labor_offer
-);
-
-fixed_point_t const producer_requested =
-producer_request.requested;
-
-// MapInstance now owns province-wide employer collection. Every province
-// receives one allocation pass; this province additionally contains the
-// bound modern producer. Future productive sites can join this same vector.
 auto allocations = map_instance.allocate_employment_phase(
-{
-ProvinceWorkforceEmployerRequests {
-.province_id = binding->province_id,
-.employers = { producer_request }
-}
-}
+std::move(employer_requests)
 );
 
-fixed_point_t producer_allocated = fixed_point_t::_0;
-
-for (
-WorkforceEmployerAllocation const& allocation :
+live_economy_runtime->apply_upstream_employer_allocations(
 allocations
-) {
-if (
-allocation.employer_id ==
-producer_employer_id
-) {
-producer_allocated = allocation.allocated;
-break;
-}
-}
-
-live_economy_runtime
-->set_preallocated_upstream_workforce(
-WorkforceAllocationResult {
-.requested = producer_requested,
-.allocated = producer_allocated
-}
 );
 
-// RGO output now consumes the assignment produced by the
-// same labor authority as the modern productive site.
+// RGO production consumes the assignments produced by the same
+// province-wide employment authority.
 map_instance.finish_rgo_production();
 
-// No POP pool is returned because the modern producer has
-// already received its authoritative assignment.
+// Productive-site workers were already hired through MapInstance.
+// Returning nullopt prevents LiveEconomyRuntime from performing
+// an independent second allocation pass.
 return std::nullopt;
 },
 clear_market
