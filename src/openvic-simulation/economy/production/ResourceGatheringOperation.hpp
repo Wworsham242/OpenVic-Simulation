@@ -29,6 +29,8 @@ namespace OpenVic {
 		pop_sum_t total_owner_count_in_state_cache = 0;
 		pop_sum_t total_worker_count_in_province_cache = 0;
 		memory::vector<std::reference_wrapper<Pop>> const* owner_pops_cache_nullable = nullptr;
+        pop_size_t previous_paid_employees_count = 0;
+        fixed_point_t previous_employee_income = 0;
 
 		ProductionType const* PROPERTY_RW(production_type_nullable);
 		fixed_point_t PROPERTY(revenue_yesterday);
@@ -79,6 +81,9 @@ void prepare_employment_cycle();
 		void allocate_legacy_workforce();
 
 [[nodiscard]] fixed_point_t get_remaining_workforce_demand() const;
+        [[nodiscard]] fixed_point_t get_labor_offer(
+                fixed_point_t no_history_offer = fixed_point_t::_1
+        ) const;
 [[nodiscard]] bool accepts_worker(Pop const& pop) const;
 [[nodiscard]] pop_size_t assign_worker(Pop& pop, pop_size_t requested_count);
 

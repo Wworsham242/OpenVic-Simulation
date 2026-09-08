@@ -1152,3 +1152,177 @@ CHECK(provenance->downstream.actual_output == fixed_point_t { 2 });
 CHECK(pop.get_unemployed() == pop_size_t { 0 });
 CHECK(world.clearings == 1);
 }
+
+TEST_CASE(
+"Realized producer economics change the next labor allocation",
+"[economy][productive-site][labor-offer][feedback][b4b]"
+) {
+BoundWorldFixture world;
+
+// First establish a completed profitable production cycle using real
+// production, inventory, market execution, and authoritative workforce.
+world.replace_population("1", 40);
+world.cycle();
+
+fixed_point_t const high_offer =
+world.runtime.get_upstream_labor_offer();
+
+REQUIRE(high_offer > fixed_point_t::_0);
+
+auto high_provenance = world.runtime.get_latest_provenance();
+REQUIRE(high_provenance.has_value());
+REQUIRE(high_provenance->workforce.has_value());
+CHECK(high_provenance->workforce->allocated == fixed_point_t { 40 });
+CHECK(high_provenance->upstream_market.output_sold == fixed_point_t { 4 });
+CHECK(high_provenance->upstream_market.money_received > fixed_point_t::_0);
+
+// Remove the real upstream resource. The producer still receives workers
+// for this completed cycle, but cannot create saleable output. Therefore
+// its observed economic capacity per worker falls to zero.
+REQUIRE(
+world.runtime.set_source_resource_availability(fixed_point_t::_0)
+);
+
+world.replace_population("1", 40);
+world.cycle();
+
+fixed_point_t const low_offer =
+world.runtime.get_upstream_labor_offer();
+
+auto low_provenance = world.runtime.get_latest_provenance();
+REQUIRE(low_provenance.has_value());
+REQUIRE(low_provenance->workforce.has_value());
+
+CHECK(low_provenance->workforce->allocated == fixed_point_t { 40 });
+CHECK(low_provenance->upstream.actual_output == fixed_point_t::_0);
+CHECK(low_provenance->upstream_market.output_sold == fixed_point_t::_0);
+CHECK(low_provenance->upstream_market.money_received == fixed_point_t::_0);
+CHECK(low_offer == fixed_point_t::_0);
+CHECK(high_offer > low_offer);
+
+// Choose one competing offer strictly between the producer's observed
+// high and low economic offers. Nothing about the competitor changes.
+fixed_point_t const competing_offer =
+high_offer / fixed_point_t { 2 };
+
+REQUIRE(competing_offer > low_offer);
+REQUIRE(high_offer > competing_offer);
+
+// ------------------------------------------------------------
+// Allocation using the producer's HIGH realized economic offer.
+// Producer should be first and receive its entire 40-worker demand.
+// ------------------------------------------------------------
+
+world.replace_population("1", 60);
+
+auto high_workforce =
+world.runtime.prepare_upstream_site(*world.map);
+
+REQUIRE(high_workforce.has_value());
+
+AggregateProducer& producer =
+world.runtime.get_upstream_producer_for_workforce_allocation();
+
+TestEmployer high_competitor;
+
+WorkforceEmployerRequest high_producer_request =
+make_producer_workforce_request(
+producer,
+"site:1:plant",
+high_offer
+);
+
+WorkforceEmployerRequest high_competing_request =
+high_competitor.request(
+"other:1",
+competing_offer,
+40
+);
+
+auto high_allocations = allocate_competing_employers(
+{
+high_producer_request,
+high_competing_request
+},
+*high_workforce
+);
+
+REQUIRE(high_allocations.size() == 2);
+
+fixed_point_t high_producer_allocated = fixed_point_t::_0;
+
+for (WorkforceEmployerAllocation const& allocation : high_allocations) {
+if (allocation.employer_id == "site:1:plant") {
+high_producer_allocated = allocation.allocated;
+}
+}
+
+CHECK(high_producer_allocated == fixed_point_t { 40 });
+CHECK(high_competitor.assigned == fixed_point_t { 20 });
+CHECK(
+world.province("1").get_mutable_pops().begin()->get_unemployed()
+== pop_size_t { 0 }
+);
+
+// ------------------------------------------------------------
+// Allocation using the producer's LOW realized economic offer.
+// The unchanged competitor is now preferred, so it receives 40
+// and only the remaining 20 can reach the producer.
+// ------------------------------------------------------------
+
+world.replace_population("1", 60);
+
+auto low_workforce =
+world.runtime.prepare_upstream_site(*world.map);
+
+REQUIRE(low_workforce.has_value());
+
+TestEmployer low_competitor;
+
+WorkforceEmployerRequest low_producer_request =
+make_producer_workforce_request(
+producer,
+"site:1:plant",
+low_offer
+);
+
+WorkforceEmployerRequest low_competing_request =
+low_competitor.request(
+"other:1",
+competing_offer,
+40
+);
+
+auto low_allocations = allocate_competing_employers(
+{
+low_producer_request,
+low_competing_request
+},
+*low_workforce
+);
+
+REQUIRE(low_allocations.size() == 2);
+
+fixed_point_t low_producer_allocated = fixed_point_t::_0;
+
+for (WorkforceEmployerAllocation const& allocation : low_allocations) {
+if (allocation.employer_id == "site:1:plant") {
+low_producer_allocated = allocation.allocated;
+}
+}
+
+CHECK(low_competitor.assigned == fixed_point_t { 40 });
+CHECK(low_producer_allocated == fixed_point_t { 20 });
+
+// Same finite authoritative POP supply in both allocations.
+// No employer created workers and no worker was hired twice.
+CHECK(
+world.province("1").get_mutable_pops().begin()->get_unemployed()
+== pop_size_t { 0 }
+);
+CHECK(
+low_competitor.assigned + low_producer_allocated
+== fixed_point_t { 60 }
+);
+}
+

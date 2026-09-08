@@ -335,6 +335,31 @@ public:
 return upstream;
 }
 
+[[nodiscard]] fixed_point_t get_upstream_labor_offer(
+fixed_point_t no_history_offer = fixed_point_t::_1
+) const {
+if (!completed_provenance.has_value()) {
+return no_history_offer;
+}
+
+LiveEconomyCycleProvenance const& previous = *completed_provenance;
+
+if (
+!previous.workforce.has_value() ||
+previous.workforce->allocated < fixed_point_t::_1
+) {
+return no_history_offer;
+}
+
+fixed_point_t const operating_surplus = std::max(
+previous.upstream_market.money_received -
+previous.upstream_market.money_spent,
+fixed_point_t::_0
+);
+
+return operating_surplus / previous.workforce->allocated;
+}
+
 [[nodiscard]] ProductiveSiteBinding const* get_upstream_site_binding() const {
 return upstream_site ? &*upstream_site : nullptr;
 }

@@ -251,18 +251,24 @@ std::string const producer_employer_id =
 "site:" + binding->province_id + ":" +
 binding->building_id;
 
+fixed_point_t const rgo_labor_offer =
+province->get_mutable_rgo().get_labor_offer();
+
+fixed_point_t const producer_labor_offer =
+live_economy_runtime->get_upstream_labor_offer();
+
 WorkforceEmployerRequest rgo_request =
 make_rgo_workforce_request(
 province->get_mutable_rgo(),
 rgo_employer_id,
-fixed_point_t::_1
+rgo_labor_offer
 );
 
 WorkforceEmployerRequest producer_request =
 make_producer_workforce_request(
 producer,
 producer_employer_id,
-fixed_point_t::_1
+producer_labor_offer
 );
 
 fixed_point_t const producer_requested =

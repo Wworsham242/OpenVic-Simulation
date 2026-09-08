@@ -129,6 +129,9 @@ fixed_point_t ResourceGatheringOperation::calculate_size_modifier() const {
 void ResourceGatheringOperation::prepare_employment_cycle() {
 ProvinceInstance& location = *location_ptr;
 
+previous_paid_employees_count = total_paid_employees_count_cache;
+previous_employee_income = total_employee_income_cache;
+
 total_worker_count_in_province_cache = 0;
 total_owner_count_in_state_cache = 0;
 owner_pops_cache_nullable = nullptr;
@@ -163,6 +166,19 @@ owner_pops_cache_nullable =
 
 void ResourceGatheringOperation::allocate_legacy_workforce() {
 hire();
+}
+fixed_point_t ResourceGatheringOperation::get_labor_offer(
+fixed_point_t no_history_offer
+) const {
+if (
+previous_paid_employees_count <= 0 ||
+previous_employee_income <= fixed_point_t::_0
+) {
+return no_history_offer;
+}
+
+return previous_employee_income /
+fixed_point_t { type_safe::get(previous_paid_employees_count) };
 }
 fixed_point_t ResourceGatheringOperation::get_remaining_workforce_demand() const {
 if (production_type_nullable == nullptr || max_employee_count_cache <= 0) {
