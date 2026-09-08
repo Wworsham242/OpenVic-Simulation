@@ -16,6 +16,7 @@
 #include "openvic-simulation/economy/production/AggregateProducer.hpp"
 #include "openvic-simulation/economy/production/AggregateProducerMarketBridge.hpp"
 #include "openvic-simulation/economy/production/WorkforceAllocation.hpp"
+#include "openvic-simulation/economy/production/ProductiveSiteMaterialFlowResolver.hpp"
 #include "openvic-simulation/economy/trading/LogisticsGraph.hpp"
 #include "openvic-simulation/economy/trading/MarketNodeAccess.hpp"
 #include "openvic-simulation/economy/trading/SharedTransportCapacity.hpp"
@@ -80,12 +81,6 @@ struct ResourceGraphRoute final {
 	market_node_index_t destination_node {};
 };
 
-struct ProductiveSiteResourceRoute final {
-	std::string employer_id;
-	market_node_index_t source_node {};
-	market_node_index_t destination_node {};
-	GoodDefinition const* good = nullptr;
-};
 
 struct LiveEconomyStatus final {
 	bool configured = false;
@@ -343,325 +338,55 @@ private:
 		status.intermediate_quantity_traded_yesterday =
 			market.get_quantity_traded_yesterday();
 	}
-    [[nodiscard]] ProductiveSiteResourceRoute const*
-    find_upstream_site_resource_route(
-            std::string_view employer_id,
-            GoodDefinition const& good
-    ) const {
-            auto const it = std::find_if(
-                    upstream_site_resource_routes.begin(),
-                    upstream_site_resource_routes.end(),
-                    [employer_id, &good](
-                            ProductiveSiteResourceRoute const& route
-                    ) {
-                            return route.employer_id == employer_id
-                                    && route.good == &good;
-                    }
-            );
-
-            return it != upstream_site_resource_routes.end()
-                    ? &*it
-                    : nullptr;
-    }
-
-    [[nodiscard]] bool has_upstream_site_resource_routes_for(
-            GoodDefinition const& good
-    ) const {
-            return std::any_of(
-                    upstream_site_resource_routes.begin(),
-                    upstream_site_resource_routes.end(),
-                    [&good](ProductiveSiteResourceRoute const& route) {
-                            return route.good == &good;
-                    }
-            );
-    }
-
     [[nodiscard]] ResourceFlowResult
     fulfill_source_flows_across_upstream_sites() {
-            struct source_target_t final {
-                    std::string employer_id;
-                    AggregateProducer* producer = nullptr;
-                    fixed_point_t shortfall = fixed_point_t::_0;
-                    fixed_point_t accessible_request = fixed_point_t::_0;
-                    fixed_point_t allocated = fixed_point_t::_0;
-                    std::string flow_id;
-            };
+        std::vector<ProductiveSiteMaterialInput> inputs;
+        inputs.reserve(1 + additional_resource_inputs.size());
 
-            struct input_flow_t final {
-                    GoodDefinition const* good = nullptr;
-                    fixed_point_t desired_flow = fixed_point_t::_0;
-                    ResourceSupplyNetwork* network = nullptr;
-                    std::vector<ResourceSourceAccess> source_access;
-                    std::vector<source_target_t> targets;
-                    ResourceFlowResult result {};
-                    bool primary = false;
-            };
+        inputs.push_back(ProductiveSiteMaterialInput {
+            .good = scenario.source_inflow_good,
+            .desired_flow = scenario.source_inflow_per_daily_tick,
+            .network = &source_network,
+            .source_access = build_resource_source_access(),
+            .primary = true
+        });
 
-            std::vector<input_flow_t> inputs;
-            inputs.reserve(1 + additional_resource_inputs.size());
-
-            inputs.push_back(input_flow_t {
-                    .good = scenario.source_inflow_good,
-                    .desired_flow = scenario.source_inflow_per_daily_tick,
-                    .network = &source_network,
-                    .source_access = build_resource_source_access(),
-                    .primary = true
+        for (AdditionalResourceInputState& input :
+                additional_resource_inputs) {
+            inputs.push_back(ProductiveSiteMaterialInput {
+                .good = input.good,
+                .desired_flow = input.inflow_per_daily_tick,
+                .network = &input.network,
+                .primary = false
             });
+        }
 
-            for (AdditionalResourceInputState& input :
-                    additional_resource_inputs) {
-                    inputs.push_back(input_flow_t {
-                            .good = input.good,
-                            .desired_flow = input.inflow_per_daily_tick,
-                            .network = &input.network,
-                            .primary = false
-                    });
-            }
+        std::vector<ProductiveSiteMaterialTarget> targets;
+        targets.reserve(1 + additional_upstream_sites.size());
 
-            std::sort(
-                    inputs.begin(),
-                    inputs.end(),
-                    [](input_flow_t const& lhs, input_flow_t const& rhs) {
-                            if (lhs.primary != rhs.primary) {
-                                    return lhs.primary;
-                            }
-                            return lhs.good->get_identifier()
-                                    < rhs.good->get_identifier();
-                    }
-            );
+        targets.push_back(ProductiveSiteMaterialTarget {
+            .employer_id = upstream_employer_id.empty()
+                ? std::string { "site:primary" }
+                : upstream_employer_id,
+            .producer = &upstream,
+            .bridge = &upstream_bridge
+        });
 
-            std::vector<LogisticsGraphFlowRequest> graph_requests;
+        for (auto& site : additional_upstream_sites) {
+            targets.push_back(ProductiveSiteMaterialTarget {
+                .employer_id = site->employer_id,
+                .producer = &site->producer,
+                .bridge = &site->bridge
+            });
+        }
 
-            for (input_flow_t& input : inputs) {
-                    GoodDefinition const& good = *input.good;
-
-                    input.targets.push_back(source_target_t {
-                            .employer_id = upstream_employer_id.empty()
-                                    ? std::string { "site:primary" }
-                                    : upstream_employer_id,
-                            .producer = &upstream,
-                            .shortfall =
-                                    upstream_bridge
-                                            .calculate_input_shortfall(good)
-                    });
-
-                    for (auto const& site : additional_upstream_sites) {
-                            input.targets.push_back(source_target_t {
-                                    .employer_id = site->employer_id,
-                                    .producer = &site->producer,
-                                    .shortfall =
-                                            site->bridge
-                                                .calculate_input_shortfall(
-                                                        good
-                                                )
-                            });
-                    }
-
-                    std::sort(
-                            input.targets.begin(),
-                            input.targets.end(),
-                            [](source_target_t const& lhs,
-                                    source_target_t const& rhs) {
-                                    return lhs.employer_id
-                                            < rhs.employer_id;
-                            }
-                    );
-
-                    bool const has_explicit_routes =
-                            has_upstream_site_resource_routes_for(good);
-
-                    for (source_target_t& target : input.targets) {
-                            if (
-                                    !has_explicit_routes ||
-                                    target.shortfall <= fixed_point_t::_0
-                            ) {
-                                    target.accessible_request =
-                                            target.shortfall;
-                                    continue;
-                            }
-
-                            ProductiveSiteResourceRoute const* const route =
-                                    find_upstream_site_resource_route(
-                                            target.employer_id,
-                                            good
-                                    );
-
-                            if (route == nullptr) {
-                                    target.accessible_request =
-                                            target.shortfall;
-                                    continue;
-                            }
-
-                            target.flow_id =
-                                    std::string { good.get_identifier() };
-                            target.flow_id += "|";
-                            target.flow_id += target.employer_id;
-
-                            graph_requests.push_back(
-                                    LogisticsGraphFlowRequest {
-                                            .flow_id = target.flow_id,
-                                            .source = route->source_node,
-                                            .destination =
-                                                    route->destination_node,
-                                            .requested = target.shortfall
-                                    }
-                            );
-                    }
-            }
-
-            // One graph allocation across every site AND every commodity.
-            // Shared transport edges therefore cannot be double-spent by
-            // giving each input good its own copy of edge capacity.
-            auto const graph_allocations =
-                    logistics_graph.allocate_flows(graph_requests);
-
-            for (LogisticsGraphFlowAllocation const& allocation :
-                    graph_allocations) {
-                    for (input_flow_t& input : inputs) {
-                            auto const target_it = std::find_if(
-                                    input.targets.begin(),
-                                    input.targets.end(),
-                                    [&allocation](
-                                            source_target_t const& target
-                                    ) {
-                                            return !target.flow_id.empty()
-                                                    && target.flow_id ==
-                                                        allocation.flow_id;
-                                    }
-                            );
-
-                            if (target_it != input.targets.end()) {
-                                    target_it->accessible_request =
-                                            std::min(
-                                                    target_it->shortfall,
-                                                    allocation.allocated
-                                            );
-                                    break;
-                            }
-                    }
-            }
-
-            ResourceFlowResult primary_result {};
-
-            for (input_flow_t& input : inputs) {
-                    fixed_point_t total_accessible_request =
-                            fixed_point_t::_0;
-
-                    for (source_target_t const& target : input.targets) {
-                            total_accessible_request +=
-                                    target.accessible_request;
-                    }
-
-                    fixed_point_t const desired_source_flow =
-                            std::max(
-                                    input.desired_flow,
-                                    fixed_point_t::_0
-                            );
-
-                    fixed_point_t const reachable_demand =
-                            std::min(
-                                    desired_source_flow,
-                                    total_accessible_request
-                            );
-
-                    input.result = input.network->fulfill(
-                            reachable_demand,
-                            input.source_access
-                    );
-
-                    fixed_point_t const route_unmet =
-                            desired_source_flow - reachable_demand;
-
-                    if (
-                            route_unmet > fixed_point_t::_0 &&
-                            total_accessible_request <
-                                    desired_source_flow
-                    ) {
-                            input.result.requested =
-                                    desired_source_flow;
-                            input.result.unmet += route_unmet;
-                            input.result.source_access_limited = true;
-                    }
-
-                    if (
-                            input.result.delivered > fixed_point_t::_0 &&
-                            total_accessible_request >
-                                    fixed_point_t::_0
-                    ) {
-                            fixed_point_t remaining =
-                                    input.result.delivered;
-
-                            for (source_target_t& target :
-                                    input.targets) {
-                                    if (
-                                            target.accessible_request <=
-                                            fixed_point_t::_0
-                                    ) {
-                                            continue;
-                                    }
-
-                                    fixed_point_t const share =
-                                            std::min(
-                                                    target.accessible_request,
-                                                    input.result.delivered *
-                                                        target
-                                                            .accessible_request /
-                                                        total_accessible_request
-                                            );
-
-                                    target.producer->add_inventory(
-                                            *input.good,
-                                            share
-                                    );
-
-                                    target.allocated += share;
-                                    remaining -= share;
-                            }
-
-                            for (source_target_t& target :
-                                    input.targets) {
-                                    if (
-                                            remaining <=
-                                            fixed_point_t::_0
-                                    ) {
-                                            break;
-                                    }
-
-                                    fixed_point_t const unmet =
-                                            std::max(
-                                                    target
-                                                        .accessible_request -
-                                                        target.allocated,
-                                                    fixed_point_t::_0
-                                            );
-
-                                    fixed_point_t const extra =
-                                            std::min(
-                                                    unmet,
-                                                    remaining
-                                            );
-
-                                    if (extra > fixed_point_t::_0) {
-                                            target.producer
-                                                ->add_inventory(
-                                                        *input.good,
-                                                        extra
-                                                );
-
-                                            target.allocated += extra;
-                                            remaining -= extra;
-                                    }
-                            }
-                    }
-
-                    if (input.primary) {
-                            primary_result = input.result;
-                    }
-            }
-
-            return primary_result;
+        return ProductiveSiteMaterialFlowResolver::resolve(
+            std::move(inputs),
+            targets,
+            upstream_site_resource_routes,
+            logistics_graph
+        );
     }
-
 public:// Migration mapping only: SimTime itself remains unitless.
 	static constexpr Cadence DAILY_CADENCE = *Cadence::create(24);
 
