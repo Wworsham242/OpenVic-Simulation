@@ -2717,3 +2717,183 @@ TEST_CASE(
 	CHECK(stranded->upstream.external_limited);
 	CHECK(stranded->upstream.actual_output == fixed_point_t { 2 });
 }
+
+TEST_CASE(
+	"Electricity redispatch uses reachable spare generation after source outage",
+	"[economy][utilities][electricity-grid][redispatch][b11]"
+) {
+	LiveEconomyFixture fixture;
+
+	AggregateProducer plant {
+		"redispatch-plant",
+		*fixture.upstream_process,
+		fixed_point_t { 4 },
+		fixed_point_t::_1
+	};
+
+	std::vector<ProductiveSiteUtilityTarget> targets {
+		{
+			.employer_id = "redispatch-plant",
+			.producer = &plant
+		}
+	};
+
+	std::vector<ProductiveSiteUtilityRequirement> requirements {
+		{
+			.employer_id = "redispatch-plant",
+			.kind = ProductiveSiteUtilityKind::Electricity,
+			.required_per_output = fixed_point_t::_1,
+			.available_per_tick = fixed_point_t::_0
+		}
+	};
+
+	LogisticsGraph transmission;
+	REQUIRE(
+		transmission.configure(
+			{
+				LogisticsGraphEdge {
+					.edge_id = "blocked-source-line",
+					.source = market_node_index_t { 0 },
+					.destination = market_node_index_t { 10 },
+					.leg = TransportLeg {
+						.nominal_capacity = fixed_point_t { 4 },
+						.open = false
+					}
+				},
+				LogisticsGraphEdge {
+					.edge_id = "backup-source-line",
+					.source = market_node_index_t { 20 },
+					.destination = market_node_index_t { 10 },
+					.leg = TransportLeg {
+						.nominal_capacity = fixed_point_t { 4 }
+					}
+				}
+			}
+		)
+	);
+
+	auto allocations =
+		ProductiveSiteElectricityGridResolver::resolve_sources(
+			{
+				ProductiveSiteElectricitySource {
+					.source_id = "a_blocked",
+					.source_node = market_node_index_t { 0 },
+					.available_generation_per_tick =
+						fixed_point_t { 4 }
+				},
+				ProductiveSiteElectricitySource {
+					.source_id = "b_backup",
+					.source_node = market_node_index_t { 20 },
+					.available_generation_per_tick =
+						fixed_point_t { 4 }
+				}
+			},
+			transmission,
+			{
+				ProductiveSiteElectricityConnection {
+					.employer_id = "redispatch-plant",
+					.destination_node = market_node_index_t { 10 }
+				}
+			},
+			targets,
+			requirements
+		);
+
+	REQUIRE(allocations.size() == 1);
+	CHECK(allocations[0].requested == fixed_point_t { 4 });
+	CHECK(allocations[0].delivered == fixed_point_t { 4 });
+	CHECK(requirements[0].available_per_tick == fixed_point_t { 4 });
+}
+
+TEST_CASE(
+	"Runtime electricity redispatch restores output through surviving generator",
+	"[economy][utilities][electricity-grid][redispatch][runtime][b11]"
+) {
+	LiveEconomyFixture fixture;
+	GoodInstanceManager goods { fixture.definitions, fixture.rules };
+	auto scenario = fixture.make_scenario();
+	LiveEconomyRuntime runtime { fixture.rules, goods, scenario };
+
+	REQUIRE(
+		runtime.configure_upstream_site_utility_requirements(
+			{
+				ProductiveSiteUtilityRequirement {
+					.employer_id = "site:primary",
+					.kind = ProductiveSiteUtilityKind::Electricity,
+					.required_per_output = fixed_point_t::_1,
+					.available_per_tick = fixed_point_t::_0
+				}
+			}
+		)
+	);
+
+	REQUIRE(
+		runtime.configure_upstream_electricity_sources(
+			{
+				ProductiveSiteElectricitySource {
+					.source_id = "a_primary",
+					.source_node = market_node_index_t { 0 },
+					.available_generation_per_tick =
+						fixed_point_t { 4 }
+				},
+				ProductiveSiteElectricitySource {
+					.source_id = "b_backup",
+					.source_node = market_node_index_t { 20 },
+					.available_generation_per_tick =
+						fixed_point_t { 4 }
+				}
+			},
+			{
+				LogisticsGraphEdge {
+					.edge_id = "primary-line",
+					.source = market_node_index_t { 0 },
+					.destination = market_node_index_t { 10 },
+					.leg = TransportLeg {
+						.nominal_capacity = fixed_point_t { 4 }
+					}
+				},
+				LogisticsGraphEdge {
+					.edge_id = "backup-line",
+					.source = market_node_index_t { 20 },
+					.destination = market_node_index_t { 10 },
+					.leg = TransportLeg {
+						.nominal_capacity = fixed_point_t { 4 }
+					}
+				}
+			},
+			{
+				ProductiveSiteElectricityConnection {
+					.employer_id = "site:primary",
+					.destination_node = market_node_index_t { 10 }
+				}
+			}
+		)
+	);
+
+	GoodInstance& intermediate_market =
+		goods.get_good_instance_by_definition(*fixture.intermediate);
+
+	auto cycle = [&]() {
+		runtime.pre_market_daily_tick();
+		execute_intermediate_market(intermediate_market);
+		runtime.post_market_daily_tick();
+	};
+
+	cycle();
+	auto full = runtime.get_latest_provenance();
+	REQUIRE(full.has_value());
+	CHECK(full->upstream.actual_output == fixed_point_t { 4 });
+
+	REQUIRE(
+		runtime.set_upstream_electricity_edge_open(
+			"primary-line",
+			false
+		)
+	);
+
+	cycle();
+	auto redispatched = runtime.get_latest_provenance();
+	REQUIRE(redispatched.has_value());
+	CHECK_FALSE(redispatched->upstream.external_limited);
+	CHECK(redispatched->upstream.actual_output == fixed_point_t { 4 });
+}

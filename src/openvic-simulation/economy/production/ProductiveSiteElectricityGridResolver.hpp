@@ -36,14 +36,16 @@ struct ProductiveSiteElectricityAllocation final {
 /// Deterministic coarse electricity allocation for productive sites.
 ///
 /// Multiple finite generation sources can inject at different grid nodes.
-/// Each source receives a bounded dispatch budget, that budget is distributed
-/// across current productive-site loads, and every source->site flow is routed
-/// in one shared LogisticsGraph allocation. This ensures generation and
-/// transmission cannot be double-spent.
+/// B11 adds one deterministic redispatch pass: after the first shared
+/// transmission solve, generation that failed to reach loads may be reassigned
+/// from any source with spare physical generation to loads that remain unmet
+/// and are still reachable.
 ///
-/// B10 deliberately does not redispatch stranded generation after routing.
-/// A disconnected/congested source can therefore leave unused generation.
-/// Economic dispatch, reserve margins, storage and re-dispatch are later work.
+/// The final redispatch state is solved as one complete source->load flow set,
+/// so line capacities are never double-spent between passes.
+///
+/// This is still not economic dispatch, unit commitment, reserve scheduling,
+/// storage dispatch, AC power flow, frequency control, or a power market.
 class ProductiveSiteElectricityGridResolver final {
 private:
 	struct Load final {
@@ -58,6 +60,12 @@ private:
 		market_node_index_t source_node {};
 		fixed_point_t available = fixed_point_t::_0;
 		fixed_point_t dispatch_budget = fixed_point_t::_0;
+	};
+
+	struct SourceLoadDelivery final {
+		std::string source_id;
+		std::string employer_id;
+		fixed_point_t delivered = fixed_point_t::_0;
 	};
 
 	[[nodiscard]] static ProductiveSiteUtilityTarget const* find_target(
@@ -101,10 +109,8 @@ private:
 			total_generation += source.available;
 		}
 
-		fixed_point_t const dispatch_total = std::min(
-			total_requested,
-			total_generation
-		);
+		fixed_point_t const dispatch_total =
+			std::min(total_requested, total_generation);
 
 		if (
 			dispatch_total <= fixed_point_t::_0 ||
@@ -188,6 +194,246 @@ private:
 		return allocations;
 	}
 
+	[[nodiscard]] static std::vector<LogisticsGraphFlowRequest>
+	build_initial_requests(
+		std::vector<SourceBudget> const& sources,
+		std::vector<Load> const& loads,
+		fixed_point_t total_requested
+	) {
+		std::vector<LogisticsGraphFlowRequest> requests;
+
+		for (SourceBudget const& source : sources) {
+			auto const load_allocations =
+				distribute_source_budget_to_loads(
+					source,
+					loads,
+					total_requested
+				);
+
+			for (size_t i = 0; i < loads.size(); ++i) {
+				if (load_allocations[i] <= fixed_point_t::_0) {
+					continue;
+				}
+
+				std::string flow_id = "electricity|";
+				flow_id += source.source_id;
+				flow_id += "|";
+				flow_id += loads[i].employer_id;
+
+				requests.push_back(LogisticsGraphFlowRequest {
+					.flow_id = std::move(flow_id),
+					.source = source.source_node,
+					.destination = loads[i].destination_node,
+					.requested = load_allocations[i]
+				});
+			}
+		}
+
+		return requests;
+	}
+
+	static void accumulate_allocations(
+		std::vector<LogisticsGraphFlowAllocation> const& allocations,
+		std::vector<Load>& loads,
+		std::vector<SourceLoadDelivery>& deliveries
+	) {
+		for (Load& load : loads) {
+			load.delivered = fixed_point_t::_0;
+		}
+		deliveries.clear();
+
+		for (LogisticsGraphFlowAllocation const& allocation : allocations) {
+			std::string_view const flow = allocation.flow_id;
+			std::string_view const prefix = "electricity|";
+
+			if (!flow.starts_with(prefix)) {
+				continue;
+			}
+
+			size_t const separator = flow.find('|', prefix.size());
+			if (separator == std::string_view::npos) {
+				continue;
+			}
+
+			std::string_view const source_id =
+				flow.substr(prefix.size(), separator - prefix.size());
+			std::string_view const employer_id =
+				flow.substr(separator + 1);
+
+			auto const load_it = std::find_if(
+				loads.begin(),
+				loads.end(),
+				[employer_id](Load const& load) {
+					return load.employer_id == employer_id;
+				}
+			);
+
+			if (load_it != loads.end()) {
+				load_it->delivered += allocation.allocated;
+			}
+
+			deliveries.push_back(SourceLoadDelivery {
+				.source_id = std::string { source_id },
+				.employer_id = std::string { employer_id },
+				.delivered = allocation.allocated
+			});
+		}
+	}
+
+	[[nodiscard]] static fixed_point_t delivered_by_source(
+		std::vector<SourceLoadDelivery> const& deliveries,
+		std::string_view source_id
+	) {
+		fixed_point_t total = fixed_point_t::_0;
+
+		for (SourceLoadDelivery const& delivery : deliveries) {
+			if (delivery.source_id == source_id) {
+				total += delivery.delivered;
+			}
+		}
+
+		return total;
+	}
+
+	[[nodiscard]] static fixed_point_t delivered_to_load(
+		std::vector<SourceLoadDelivery> const& deliveries,
+		std::string_view source_id,
+		std::string_view employer_id
+	) {
+		fixed_point_t total = fixed_point_t::_0;
+
+		for (SourceLoadDelivery const& delivery : deliveries) {
+			if (
+				delivery.source_id == source_id &&
+				delivery.employer_id == employer_id
+			) {
+				total += delivery.delivered;
+			}
+		}
+
+		return total;
+	}
+
+	[[nodiscard]] static std::vector<LogisticsGraphFlowRequest>
+	build_redispatched_requests(
+		std::vector<SourceBudget> const& sources,
+		std::vector<Load> const& loads,
+		std::vector<SourceLoadDelivery> const& first_pass_deliveries,
+		LogisticsGraph const& transmission_graph
+	) {
+		std::vector<fixed_point_t> remaining_unmet;
+		remaining_unmet.reserve(loads.size());
+
+		for (Load const& load : loads) {
+			remaining_unmet.push_back(
+				std::max(
+					load.requested - load.delivered,
+					fixed_point_t::_0
+				)
+			);
+		}
+
+		// extras[source][load]
+		std::vector<std::vector<fixed_point_t>> extras(
+			sources.size(),
+			std::vector<fixed_point_t>(
+				loads.size(),
+				fixed_point_t::_0
+			)
+		);
+
+		for (size_t source_index = 0;
+				source_index < sources.size();
+				++source_index) {
+			SourceBudget const& source = sources[source_index];
+
+			fixed_point_t spare = std::max(
+				source.available -
+					delivered_by_source(
+						first_pass_deliveries,
+						source.source_id
+					),
+				fixed_point_t::_0
+			);
+
+			if (spare <= fixed_point_t::_0) {
+				continue;
+			}
+
+			for (size_t load_index = 0;
+					load_index < loads.size();
+					++load_index) {
+				if (
+					spare <= fixed_point_t::_0 ||
+					remaining_unmet[load_index] <= fixed_point_t::_0
+				) {
+					continue;
+				}
+
+				LogisticsGraphPath const reachable =
+					transmission_graph.find_route(
+						source.source_node,
+						loads[load_index].destination_node
+					);
+
+				if (!reachable.found) {
+					continue;
+				}
+
+				fixed_point_t const extra = std::min(
+					spare,
+					remaining_unmet[load_index]
+				);
+
+				extras[source_index][load_index] = extra;
+				spare -= extra;
+				remaining_unmet[load_index] -= extra;
+			}
+		}
+
+		std::vector<LogisticsGraphFlowRequest> requests;
+
+		for (size_t source_index = 0;
+				source_index < sources.size();
+				++source_index) {
+			SourceBudget const& source = sources[source_index];
+
+			for (size_t load_index = 0;
+					load_index < loads.size();
+					++load_index) {
+				Load const& load = loads[load_index];
+
+				fixed_point_t const baseline =
+					delivered_to_load(
+						first_pass_deliveries,
+						source.source_id,
+						load.employer_id
+					);
+
+				fixed_point_t const requested =
+					baseline + extras[source_index][load_index];
+
+				if (requested <= fixed_point_t::_0) {
+					continue;
+				}
+
+				std::string flow_id = "electricity|";
+				flow_id += source.source_id;
+				flow_id += "|";
+				flow_id += load.employer_id;
+
+				requests.push_back(LogisticsGraphFlowRequest {
+					.flow_id = std::move(flow_id),
+					.source = source.source_node,
+					.destination = load.destination_node,
+					.requested = requested
+				});
+			}
+		}
+
+		return requests;
+	}
+
 public:
 	[[nodiscard]] static std::vector<ProductiveSiteElectricityAllocation>
 	resolve_sources(
@@ -227,7 +473,6 @@ public:
 
 			ProductiveSiteUtilityTarget const* const target =
 				find_target(targets, requirement.employer_id);
-
 			ProductiveSiteElectricityConnection const* const connection =
 				find_connection(connections, requirement.employer_id);
 
@@ -281,68 +526,48 @@ public:
 			total_requested
 		);
 
-		std::vector<LogisticsGraphFlowRequest> graph_requests;
+		auto initial_requests = build_initial_requests(
+			source_budgets,
+			loads,
+			total_requested
+		);
 
-		for (SourceBudget const& source : source_budgets) {
-			auto const load_allocations =
-				distribute_source_budget_to_loads(
-					source,
-					loads,
-					total_requested
-				);
+		auto allocations =
+			transmission_graph.allocate_flows(initial_requests);
 
-			for (size_t i = 0; i < loads.size(); ++i) {
-				if (load_allocations[i] <= fixed_point_t::_0) {
-					continue;
-				}
+		std::vector<SourceLoadDelivery> first_pass_deliveries;
+		accumulate_allocations(
+			allocations,
+			loads,
+			first_pass_deliveries
+		);
 
-				std::string flow_id = "electricity|";
-				flow_id += source.source_id;
-				flow_id += "|";
-				flow_id += loads[i].employer_id;
-
-				graph_requests.push_back(LogisticsGraphFlowRequest {
-					.flow_id = std::move(flow_id),
-					.source = source.source_node,
-					.destination = loads[i].destination_node,
-					.requested = load_allocations[i]
-				});
-			}
+		fixed_point_t total_unmet = fixed_point_t::_0;
+		for (Load const& load : loads) {
+			total_unmet += std::max(
+				load.requested - load.delivered,
+				fixed_point_t::_0
+			);
 		}
 
-		// Every source/site pair competes in one shared transmission solve.
-		auto const graph_allocations =
-			transmission_graph.allocate_flows(graph_requests);
-
-		for (LogisticsGraphFlowAllocation const& allocation :
-				graph_allocations) {
-			std::string_view const flow = allocation.flow_id;
-			std::string_view const prefix = "electricity|";
-
-			if (!flow.starts_with(prefix)) {
-				continue;
-			}
-
-			size_t const separator =
-				flow.find('|', prefix.size());
-
-			if (separator == std::string_view::npos) {
-				continue;
-			}
-
-			std::string_view const employer_id =
-				flow.substr(separator + 1);
-
-			auto const load_it = std::find_if(
-				loads.begin(),
-				loads.end(),
-				[employer_id](Load const& load) {
-					return load.employer_id == employer_id;
-				}
+		if (total_unmet > fixed_point_t::_0) {
+			auto final_requests = build_redispatched_requests(
+				source_budgets,
+				loads,
+				first_pass_deliveries,
+				transmission_graph
 			);
 
-			if (load_it != loads.end()) {
-				load_it->delivered += allocation.allocated;
+			if (!final_requests.empty()) {
+				allocations =
+					transmission_graph.allocate_flows(final_requests);
+
+				std::vector<SourceLoadDelivery> final_deliveries;
+				accumulate_allocations(
+					allocations,
+					loads,
+					final_deliveries
+				);
 			}
 		}
 
