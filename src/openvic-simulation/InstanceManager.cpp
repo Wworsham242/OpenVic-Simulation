@@ -255,14 +255,14 @@ WorkforceEmployerRequest rgo_request =
 make_rgo_workforce_request(
 province->get_mutable_rgo(),
 rgo_employer_id,
-1
+fixed_point_t::_1
 );
 
 WorkforceEmployerRequest producer_request =
 make_producer_workforce_request(
 producer,
 producer_employer_id,
-1
+fixed_point_t::_1
 );
 
 fixed_point_t const producer_requested =

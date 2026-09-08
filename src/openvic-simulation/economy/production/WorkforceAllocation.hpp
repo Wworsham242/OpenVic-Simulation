@@ -43,7 +43,7 @@ struct WorkforceAllocationResult final {
 
 struct WorkforceEmployerRequest final {
 std::string_view employer_id;
-uint8_t priority = 0;
+fixed_point_t labor_offer = 0;
 fixed_point_t requested = 0;
 
 void* employer = nullptr;
@@ -62,7 +62,7 @@ bool operator==(WorkforceEmployerAllocation const&) const = default;
 };
 
 /// One deterministic allocation authority over a finite authoritative POP pool.
-/// Requests are ordered by priority descending, then stable employer id.
+/// Requests are ordered by labor offer descending, then stable employer id.
 /// Employment is committed only through each employer adapter's assign callback;
 /// adapters must ultimately use Pop::hire(). No cross-day employment ledger lives here.
 [[nodiscard]] std::vector<WorkforceEmployerAllocation> allocate_competing_employers(
@@ -74,7 +74,7 @@ WorkforcePool const& pool
 [[nodiscard]] WorkforceEmployerRequest make_rgo_workforce_request(
 ResourceGatheringOperation& rgo,
 std::string_view employer_id,
-uint8_t priority
+fixed_point_t labor_offer
 );
 
 /// Adapt an AggregateProducer to the same allocation authority.
@@ -83,5 +83,5 @@ uint8_t priority
 [[nodiscard]] WorkforceEmployerRequest make_producer_workforce_request(
 AggregateProducer& producer,
 std::string_view employer_id,
-uint8_t priority
+fixed_point_t labor_offer
 );}

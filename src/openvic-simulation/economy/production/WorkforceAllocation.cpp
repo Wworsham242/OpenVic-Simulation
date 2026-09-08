@@ -74,8 +74,8 @@ Pops&& pops
 std::ranges::stable_sort(
 requests,
 [](WorkforceEmployerRequest const& lhs, WorkforceEmployerRequest const& rhs) {
-if (lhs.priority != rhs.priority) {
-return lhs.priority > rhs.priority;
+if (lhs.labor_offer != rhs.labor_offer) {
+return lhs.labor_offer > rhs.labor_offer;
 }
 return lhs.employer_id < rhs.employer_id;
 }
@@ -225,11 +225,11 @@ return actual;
 WorkforceEmployerRequest OpenVic::make_rgo_workforce_request(
 ResourceGatheringOperation& rgo,
 std::string_view employer_id,
-uint8_t priority
+fixed_point_t labor_offer
 ) {
 return WorkforceEmployerRequest {
 .employer_id = employer_id,
-.priority = priority,
+.labor_offer = labor_offer,
 .requested = rgo.get_remaining_workforce_demand(),
 .employer = &rgo,
 .accepts = &rgo_accepts_worker_adapter,
@@ -240,7 +240,7 @@ return WorkforceEmployerRequest {
 WorkforceEmployerRequest OpenVic::make_producer_workforce_request(
 AggregateProducer& producer,
 std::string_view employer_id,
-uint8_t priority
+fixed_point_t labor_offer
 ) {
 producer.set_available_workforce(fixed_point_t::_0);
 
@@ -248,7 +248,7 @@ auto const& process = producer.get_production_type();
 
 return WorkforceEmployerRequest {
 .employer_id = employer_id,
-.priority = priority,
+.labor_offer = labor_offer,
 .requested =
 producer.get_capacity()
 * fixed_point_t { type_safe::get(process.base_workforce_size) },

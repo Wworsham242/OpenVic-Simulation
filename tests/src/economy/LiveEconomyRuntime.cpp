@@ -401,12 +401,12 @@ return actual;
 
 WorkforceEmployerRequest request(
 std::string_view id,
-uint8_t priority,
+fixed_point_t labor_offer,
 int workers
 ) {
 return WorkforceEmployerRequest {
 .employer_id = id,
-.priority = priority,
+.labor_offer = labor_offer,
 .requested = fixed_point_t { workers },
 .employer = this,
 .accepts = &TestEmployer::accepts,
@@ -438,8 +438,8 @@ TestEmployer second;
 
 auto result = allocate_competing_employers(
 {
-first.request("first", 2, 80),
-second.request("second", 1, 80)
+first.request("first", fixed_point_t { 2 }, 80),
+second.request("second", fixed_point_t { 1 }, 80)
 },
 WorkforcePool { std::span<Pop> { pops } }
 );
@@ -462,10 +462,10 @@ CHECK(pops[0].get_unemployed() == pop_size_t { 0 });
 }
 
 TEST_CASE(
-"Competing employer priority changes allocation deterministically",
-"[economy][native-workforce][competition][priority]"
+"Competing employer labor offer changes allocation deterministically",
+"[economy][native-workforce][competition][labor-offer]"
 ) {
-for (bool const first_has_priority : { true, false }) {
+for (bool const first_has_higher_offer : { true, false }) {
 LiveEconomyFixture fixture {
 workforce_jobs(),
 pop_size_t { 10 },
@@ -484,15 +484,15 @@ TestEmployer second;
 
 auto result = allocate_competing_employers(
 {
-first.request("first", first_has_priority ? 2 : 1, 80),
-second.request("second", first_has_priority ? 1 : 2, 80)
+first.request("first", first_has_higher_offer ? fixed_point_t { 2 } : fixed_point_t { 1 }, 80),
+second.request("second", first_has_higher_offer ? fixed_point_t { 1 } : fixed_point_t { 2 }, 80)
 },
 WorkforcePool { std::span<Pop> { pops } }
 );
 
 REQUIRE(result.size() == 2);
 
-if (first_has_priority) {
+if (first_has_higher_offer) {
 CHECK(first.assigned == fixed_point_t { 80 });
 CHECK(second.assigned == fixed_point_t { 20 });
 } else {
@@ -506,8 +506,8 @@ CHECK(pops[0].get_unemployed() == pop_size_t { 0 });
 }
 
 TEST_CASE(
-"Equal-priority competing employers use stable employer identity",
-"[economy][native-workforce][competition][determinism]"
+"Equal-offer competing employers use stable employer identity",
+"[economy][native-workforce][competition][labor-offer][determinism]"
 ) {
 for (bool const reverse_input_order : { false, true }) {
 LiveEconomyFixture fixture {
@@ -529,11 +529,11 @@ TestEmployer beta;
 std::vector<WorkforceEmployerRequest> requests;
 
 if (reverse_input_order) {
-requests.push_back(beta.request("beta", 1, 80));
-requests.push_back(alpha.request("alpha", 1, 80));
+requests.push_back(beta.request("beta", fixed_point_t { 1 }, 80));
+requests.push_back(alpha.request("alpha", fixed_point_t { 1 }, 80));
 } else {
-requests.push_back(alpha.request("alpha", 1, 80));
-requests.push_back(beta.request("beta", 1, 80));
+requests.push_back(alpha.request("alpha", fixed_point_t { 1 }, 80));
+requests.push_back(beta.request("beta", fixed_point_t { 1 }, 80));
 }
 
 auto result = allocate_competing_employers(
