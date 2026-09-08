@@ -179,23 +179,62 @@ void MapInstance::prepare_employment_phase() {
 thread_pool.process_province_ticks();
 }
 
-void MapInstance::allocate_legacy_rgo_workforce() {
-for (ProvinceInstance& province : get_province_instances()) {
-province.rgo.allocate_legacy_workforce();
-}
-}
-
-void MapInstance::allocate_legacy_rgo_workforce_except(
-std::string_view excluded_province_id
+std::vector<WorkforceEmployerAllocation> MapInstance::allocate_employment_phase(
+std::vector<ProvinceWorkforceEmployerRequests> external_employers
 ) {
+std::vector<WorkforceEmployerAllocation> external_allocations;
+
 for (ProvinceInstance& province : get_province_instances()) {
-if (province.get_identifier() == excluded_province_id) {
+std::vector<WorkforceEmployerRequest> requests;
+std::vector<std::string_view> external_ids;
+
+for (ProvinceWorkforceEmployerRequests const& group : external_employers) {
+if (group.province_id != province.get_identifier()) {
 continue;
 }
-province.rgo.allocate_legacy_workforce();
+
+for (WorkforceEmployerRequest const& request : group.employers) {
+requests.push_back(request);
+external_ids.push_back(request.employer_id);
 }
 }
 
+std::string rgo_employer_id = "rgo:";
+rgo_employer_id += province.get_identifier();
+
+requests.push_back(
+make_rgo_workforce_request(
+province.get_mutable_rgo(),
+rgo_employer_id,
+province.get_mutable_rgo().get_labor_offer()
+)
+);
+
+auto allocations = allocate_competing_employers(
+std::move(requests),
+WorkforcePool {
+WorkforceColonyView { province.get_mutable_pops() }
+}
+);
+
+// The RGO identifier above is local storage. Do not return it.
+// External employer identifiers are owned by their callers and remain valid.
+for (WorkforceEmployerAllocation const& allocation : allocations) {
+for (std::string_view const external_id : external_ids) {
+if (allocation.employer_id == external_id) {
+external_allocations.push_back(allocation);
+break;
+}
+}
+}
+}
+
+return external_allocations;
+}
+
+void MapInstance::allocate_legacy_rgo_workforce() {
+(void)allocate_employment_phase();
+}
 void MapInstance::finish_rgo_production() {
 memory::vector<fixed_point_t> reusable_vector;
 

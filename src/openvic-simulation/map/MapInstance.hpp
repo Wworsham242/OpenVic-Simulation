@@ -1,5 +1,7 @@
 #pragma once
 
+#include "openvic-simulation/economy/production/WorkforceAllocation.hpp"
+
 #include "openvic-simulation/map/ProvinceDefinition.hpp"
 #include "openvic-simulation/map/ProvinceInstance.hpp"
 #include "openvic-simulation/map/State.hpp"
@@ -9,6 +11,11 @@
 #include "openvic-simulation/types/Date.hpp"
 
 namespace OpenVic {
+        struct ProvinceWorkforceEmployerRequests final {
+                std::string_view province_id;
+                std::vector<WorkforceEmployerRequest> employers;
+        };
+
 	struct BuildingTypeManager;
 	struct MapDefinition;
 	struct MarketInstance;
@@ -88,8 +95,12 @@ namespace OpenVic {
 		void update_modifier_sums(const Date today, StaticModifierCache const& static_modifier_cache);
 		void update_gamestate(InstanceManager const& instance_manager);
 		void prepare_employment_phase();
+
+std::vector<WorkforceEmployerAllocation> allocate_employment_phase(
+        std::vector<ProvinceWorkforceEmployerRequests> external_employers = {}
+);
+
 void allocate_legacy_rgo_workforce();
-void allocate_legacy_rgo_workforce_except(std::string_view excluded_province_id);
 void finish_rgo_production();
 void map_tick();
 		void initialise_for_new_game(InstanceManager const& instance_manager);

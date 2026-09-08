@@ -1326,3 +1326,109 @@ low_competitor.assigned + low_producer_allocated
 );
 }
 
+
+TEST_CASE(
+"Map employment authority allocates RGO and multiple external employers deterministically",
+"[economy][employment-authority][multi-employer][determinism]"
+) {
+auto run = [](bool reverse_external_order) {
+BoundWorldFixture world;
+
+// One authoritative province-local labor pool.
+world.replace_population("1", 60);
+
+// Employment preparation resets all POP jobs and prepares the RGO before
+// the province-wide allocation authority runs.
+world.map->prepare_employment_phase();
+
+TestEmployer employer_a;
+TestEmployer employer_b;
+
+// Both external employers request more labor than can be jointly satisfied.
+// Distinct offers make the expected ranking explicit.
+WorkforceEmployerRequest request_a =
+employer_a.request(
+"site:1:a",
+fixed_point_t { 3 },
+40
+);
+
+WorkforceEmployerRequest request_b =
+employer_b.request(
+"site:1:b",
+fixed_point_t { 2 },
+40
+);
+
+std::vector<WorkforceEmployerRequest> external_requests;
+
+if (reverse_external_order) {
+external_requests = { request_b, request_a };
+} else {
+external_requests = { request_a, request_b };
+}
+
+auto allocations = world.map->allocate_employment_phase(
+{
+ProvinceWorkforceEmployerRequests {
+.province_id = "1",
+.employers = std::move(external_requests)
+}
+}
+);
+
+fixed_point_t allocated_a = fixed_point_t::_0;
+fixed_point_t allocated_b = fixed_point_t::_0;
+
+for (WorkforceEmployerAllocation const& allocation : allocations) {
+if (allocation.employer_id == "site:1:a") {
+allocated_a = allocation.allocated;
+} else if (allocation.employer_id == "site:1:b") {
+allocated_b = allocation.allocated;
+}
+}
+
+auto& pop = *world.province("1").get_mutable_pops().begin();
+
+struct Result final {
+fixed_point_t allocated_a;
+fixed_point_t allocated_b;
+fixed_point_t assigned_a;
+fixed_point_t assigned_b;
+pop_size_t unemployed;
+
+bool operator==(Result const&) const = default;
+};
+
+return Result {
+.allocated_a = allocated_a,
+.allocated_b = allocated_b,
+.assigned_a = employer_a.assigned,
+.assigned_b = employer_b.assigned,
+.unemployed = pop.get_unemployed()
+};
+};
+
+auto forward = run(false);
+auto reverse = run(true);
+
+// Employer A has the stronger offer and receives its entire request.
+// Employer B receives only the remaining 20 workers.
+// The RGO participates in the same authority but cannot create extra labor.
+CHECK(forward.allocated_a == fixed_point_t { 40 });
+CHECK(forward.assigned_a == fixed_point_t { 40 });
+
+CHECK(forward.allocated_b == fixed_point_t { 20 });
+CHECK(forward.assigned_b == fixed_point_t { 20 });
+
+// All 60 real workers are exhausted exactly once.
+CHECK(forward.unemployed == pop_size_t { 0 });
+CHECK(
+forward.assigned_a + forward.assigned_b
+== fixed_point_t { 60 }
+);
+
+// Collection order is not authoritative; labor offer + employer identity are.
+CHECK(reverse == forward);
+}
+

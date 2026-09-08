@@ -219,7 +219,7 @@ ProductiveSiteBinding const* binding =
 live_economy_runtime->get_upstream_site_binding();
 
 if (!workforce.has_value() || binding == nullptr) {
-map_instance.allocate_legacy_rgo_workforce();
+(void)map_instance.allocate_employment_phase();
 map_instance.finish_rgo_production();
 return std::nullopt;
 }
@@ -230,39 +230,21 @@ binding->province_id
 );
 
 if (province == nullptr) {
-map_instance.allocate_legacy_rgo_workforce();
+(void)map_instance.allocate_employment_phase();
 map_instance.finish_rgo_production();
 return std::nullopt;
 }
-
-// Non-contested provinces keep inherited RGO allocation.
-map_instance.allocate_legacy_rgo_workforce_except(
-binding->province_id
-);
 
 AggregateProducer& producer =
 live_economy_runtime
 ->get_upstream_producer_for_workforce_allocation();
 
-std::string const rgo_employer_id =
-"rgo:" + binding->province_id;
-
 std::string const producer_employer_id =
 "site:" + binding->province_id + ":" +
 binding->building_id;
 
-fixed_point_t const rgo_labor_offer =
-province->get_mutable_rgo().get_labor_offer();
-
 fixed_point_t const producer_labor_offer =
 live_economy_runtime->get_upstream_labor_offer();
-
-WorkforceEmployerRequest rgo_request =
-make_rgo_workforce_request(
-province->get_mutable_rgo(),
-rgo_employer_id,
-rgo_labor_offer
-);
 
 WorkforceEmployerRequest producer_request =
 make_producer_workforce_request(
@@ -274,12 +256,16 @@ producer_labor_offer
 fixed_point_t const producer_requested =
 producer_request.requested;
 
-auto allocations = allocate_competing_employers(
+// MapInstance now owns province-wide employer collection. Every province
+// receives one allocation pass; this province additionally contains the
+// bound modern producer. Future productive sites can join this same vector.
+auto allocations = map_instance.allocate_employment_phase(
 {
-rgo_request,
-producer_request
-},
-*workforce
+ProvinceWorkforceEmployerRequests {
+.province_id = binding->province_id,
+.employers = { producer_request }
+}
+}
 );
 
 fixed_point_t producer_allocated = fixed_point_t::_0;
@@ -316,7 +302,7 @@ return std::nullopt;
 clear_market
 );
 } else {
-map_instance.allocate_legacy_rgo_workforce();
+(void)map_instance.allocate_employment_phase();
 map_instance.finish_rgo_production();
 clear_market();
 }
