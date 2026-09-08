@@ -2487,3 +2487,233 @@ TEST_CASE(
 	CHECK(outage->upstream.external_limited);
 	CHECK(outage->upstream.actual_output == fixed_point_t::_0);
 }
+
+TEST_CASE(
+	"Multiple electricity sources inject at distinct grid nodes without double spending",
+	"[economy][utilities][electricity-grid][multi-source][b10]"
+) {
+	LiveEconomyFixture fixture;
+
+	AggregateProducer plant {
+		"multi-source-plant",
+		*fixture.upstream_process,
+		fixed_point_t { 4 },
+		fixed_point_t::_1
+	};
+
+	std::vector<ProductiveSiteUtilityTarget> targets {
+		{
+			.employer_id = "multi-source-plant",
+			.producer = &plant
+		}
+	};
+
+	std::vector<ProductiveSiteUtilityRequirement> requirements {
+		{
+			.employer_id = "multi-source-plant",
+			.kind = ProductiveSiteUtilityKind::Electricity,
+			.required_per_output = fixed_point_t::_1,
+			.available_per_tick = fixed_point_t::_0
+		}
+	};
+
+	LogisticsGraph transmission;
+	REQUIRE(
+		transmission.configure(
+			{
+				LogisticsGraphEdge {
+					.edge_id = "north-line",
+					.source = market_node_index_t { 0 },
+					.destination = market_node_index_t { 10 },
+					.leg = TransportLeg {
+						.nominal_capacity = fixed_point_t { 2 }
+					}
+				},
+				LogisticsGraphEdge {
+					.edge_id = "south-line",
+					.source = market_node_index_t { 20 },
+					.destination = market_node_index_t { 10 },
+					.leg = TransportLeg {
+						.nominal_capacity = fixed_point_t { 2 }
+					}
+				}
+			}
+		)
+	);
+
+	auto allocations =
+		ProductiveSiteElectricityGridResolver::resolve_sources(
+			{
+				ProductiveSiteElectricitySource {
+					.source_id = "north",
+					.source_node = market_node_index_t { 0 },
+					.available_generation_per_tick =
+						fixed_point_t { 2 }
+				},
+				ProductiveSiteElectricitySource {
+					.source_id = "south",
+					.source_node = market_node_index_t { 20 },
+					.available_generation_per_tick =
+						fixed_point_t { 2 }
+				}
+			},
+			transmission,
+			{
+				ProductiveSiteElectricityConnection {
+					.employer_id = "multi-source-plant",
+					.destination_node = market_node_index_t { 10 }
+				}
+			},
+			targets,
+			requirements
+		);
+
+	REQUIRE(allocations.size() == 1);
+	CHECK(allocations[0].requested == fixed_point_t { 4 });
+	CHECK(allocations[0].delivered == fixed_point_t { 4 });
+	CHECK(requirements[0].available_per_tick == fixed_point_t { 4 });
+
+	// Losing one generator removes only that generator's contribution.
+	allocations =
+		ProductiveSiteElectricityGridResolver::resolve_sources(
+			{
+				ProductiveSiteElectricitySource {
+					.source_id = "north",
+					.source_node = market_node_index_t { 0 },
+					.available_generation_per_tick =
+						fixed_point_t::_0
+				},
+				ProductiveSiteElectricitySource {
+					.source_id = "south",
+					.source_node = market_node_index_t { 20 },
+					.available_generation_per_tick =
+						fixed_point_t { 2 }
+				}
+			},
+			transmission,
+			{
+				ProductiveSiteElectricityConnection {
+					.employer_id = "multi-source-plant",
+					.destination_node = market_node_index_t { 10 }
+				}
+			},
+			targets,
+			requirements
+		);
+
+	CHECK(allocations[0].delivered == fixed_point_t { 2 });
+	CHECK(requirements[0].available_per_tick == fixed_point_t { 2 });
+}
+
+TEST_CASE(
+	"Runtime multi-source electricity generation changes productive output",
+	"[economy][utilities][electricity-grid][multi-source][runtime][b10]"
+) {
+	LiveEconomyFixture fixture;
+	GoodInstanceManager goods { fixture.definitions, fixture.rules };
+	auto scenario = fixture.make_scenario();
+	LiveEconomyRuntime runtime { fixture.rules, goods, scenario };
+
+	REQUIRE(
+		runtime.configure_upstream_site_utility_requirements(
+			{
+				ProductiveSiteUtilityRequirement {
+					.employer_id = "site:primary",
+					.kind = ProductiveSiteUtilityKind::Electricity,
+					.required_per_output = fixed_point_t::_1,
+					.available_per_tick = fixed_point_t::_0
+				}
+			}
+		)
+	);
+
+	REQUIRE(
+		runtime.configure_upstream_electricity_sources(
+			{
+				ProductiveSiteElectricitySource {
+					.source_id = "plant_a",
+					.source_node = market_node_index_t { 0 },
+					.available_generation_per_tick =
+						fixed_point_t { 2 }
+				},
+				ProductiveSiteElectricitySource {
+					.source_id = "plant_b",
+					.source_node = market_node_index_t { 20 },
+					.available_generation_per_tick =
+						fixed_point_t { 2 }
+				}
+			},
+			{
+				LogisticsGraphEdge {
+					.edge_id = "plant-a-line",
+					.source = market_node_index_t { 0 },
+					.destination = market_node_index_t { 10 },
+					.leg = TransportLeg {
+						.nominal_capacity = fixed_point_t { 2 }
+					}
+				},
+				LogisticsGraphEdge {
+					.edge_id = "plant-b-line",
+					.source = market_node_index_t { 20 },
+					.destination = market_node_index_t { 10 },
+					.leg = TransportLeg {
+						.nominal_capacity = fixed_point_t { 2 }
+					}
+				}
+			},
+			{
+				ProductiveSiteElectricityConnection {
+					.employer_id = "site:primary",
+					.destination_node = market_node_index_t { 10 }
+				}
+			}
+		)
+	);
+
+	GoodInstance& intermediate_market =
+		goods.get_good_instance_by_definition(*fixture.intermediate);
+
+	auto cycle = [&]() {
+		runtime.pre_market_daily_tick();
+		execute_intermediate_market(intermediate_market);
+		runtime.post_market_daily_tick();
+	};
+
+	cycle();
+	auto full = runtime.get_latest_provenance();
+	REQUIRE(full.has_value());
+	CHECK(full->upstream.actual_output == fixed_point_t { 4 });
+
+	REQUIRE(
+		runtime.set_upstream_electricity_source_generation(
+			"plant_a",
+			fixed_point_t::_0
+		)
+	);
+
+	cycle();
+	auto partial = runtime.get_latest_provenance();
+	REQUIRE(partial.has_value());
+	CHECK(partial->upstream.external_limited);
+	CHECK(partial->upstream.actual_output == fixed_point_t { 2 });
+
+	REQUIRE(
+		runtime.set_upstream_electricity_source_generation(
+			"plant_a",
+			fixed_point_t { 2 }
+		)
+	);
+
+	REQUIRE(
+		runtime.set_upstream_electricity_edge_open(
+			"plant-b-line",
+			false
+		)
+	);
+
+	cycle();
+	auto stranded = runtime.get_latest_provenance();
+	REQUIRE(stranded.has_value());
+	CHECK(stranded->upstream.external_limited);
+	CHECK(stranded->upstream.actual_output == fixed_point_t { 2 });
+}

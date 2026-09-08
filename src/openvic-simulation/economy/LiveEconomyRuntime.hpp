@@ -192,7 +192,7 @@ private:
 	std::vector<ResourceGraphRoute> resource_graph_routes;
 	std::vector<ProductiveSiteResourceRoute> upstream_site_resource_routes;
 	std::vector<ProductiveSiteUtilityRequirement> upstream_site_utility_requirements;
-	ProductiveSiteElectricityGridState electricity_grid;
+	std::vector<ProductiveSiteElectricitySource> electricity_sources;
 	LogisticsGraph electricity_transmission_graph;
 	std::vector<ProductiveSiteElectricityConnection> electricity_connections;
 	bool electricity_grid_configured = false;
@@ -364,8 +364,8 @@ private:
         }
 
         if (electricity_grid_configured) {
-            (void)ProductiveSiteElectricityGridResolver::resolve(
-                electricity_grid,
+            (void)ProductiveSiteElectricityGridResolver::resolve_sources(
+                electricity_sources,
                 electricity_transmission_graph,
                 electricity_connections,
                 targets,
@@ -1039,13 +1039,37 @@ preallocated_upstream_workforce = allocation;
 
 
 
-	[[nodiscard]] bool configure_upstream_electricity_grid(
-		ProductiveSiteElectricityGridState grid,
+	[[nodiscard]] bool configure_upstream_electricity_sources(
+		std::vector<ProductiveSiteElectricitySource> sources,
 		std::vector<LogisticsGraphEdge> transmission_edges,
 		std::vector<ProductiveSiteElectricityConnection> connections
 	) {
-		if (grid.available_generation_per_tick < fixed_point_t::_0) {
+		if (sources.empty()) {
 			return false;
+		}
+
+		for (ProductiveSiteElectricitySource const& source : sources) {
+			if (
+				source.source_id.empty() ||
+				source.available_generation_per_tick < fixed_point_t::_0
+			) {
+				return false;
+			}
+		}
+
+		std::sort(
+			sources.begin(),
+			sources.end(),
+			[](ProductiveSiteElectricitySource const& lhs,
+				ProductiveSiteElectricitySource const& rhs) {
+				return lhs.source_id < rhs.source_id;
+			}
+		);
+
+		for (size_t i = 1; i < sources.size(); ++i) {
+			if (sources[i - 1].source_id == sources[i].source_id) {
+				return false;
+			}
 		}
 
 		for (ProductiveSiteElectricityConnection const& connection :
@@ -1078,14 +1102,34 @@ preallocated_upstream_workforce = allocation;
 			return false;
 		}
 
-		electricity_grid = grid;
+		electricity_sources = std::move(sources);
 		electricity_transmission_graph = std::move(candidate);
 		electricity_connections = std::move(connections);
 		electricity_grid_configured = true;
 		return true;
 	}
 
-	[[nodiscard]] bool set_upstream_electricity_generation(
+	[[nodiscard]] bool configure_upstream_electricity_grid(
+		ProductiveSiteElectricityGridState grid,
+		std::vector<LogisticsGraphEdge> transmission_edges,
+		std::vector<ProductiveSiteElectricityConnection> connections
+	) {
+		return configure_upstream_electricity_sources(
+			{
+				ProductiveSiteElectricitySource {
+					.source_id = "grid_source",
+					.source_node = grid.source_node,
+					.available_generation_per_tick =
+						grid.available_generation_per_tick
+				}
+			},
+			std::move(transmission_edges),
+			std::move(connections)
+		);
+	}
+
+	[[nodiscard]] bool set_upstream_electricity_source_generation(
+		std::string_view source_id,
 		fixed_point_t available_generation_per_tick
 	) {
 		if (
@@ -1095,7 +1139,29 @@ preallocated_upstream_workforce = allocation;
 			return false;
 		}
 
-		electricity_grid.available_generation_per_tick =
+		for (ProductiveSiteElectricitySource& source :
+				electricity_sources) {
+			if (source.source_id == source_id) {
+				source.available_generation_per_tick =
+					available_generation_per_tick;
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	[[nodiscard]] bool set_upstream_electricity_generation(
+		fixed_point_t available_generation_per_tick
+	) {
+		if (
+			electricity_sources.size() != 1 ||
+			available_generation_per_tick < fixed_point_t::_0
+		) {
+			return false;
+		}
+
+		electricity_sources.front().available_generation_per_tick =
 			available_generation_per_tick;
 		return true;
 	}
