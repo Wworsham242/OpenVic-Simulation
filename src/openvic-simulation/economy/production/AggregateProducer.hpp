@@ -26,6 +26,8 @@ struct AggregateProductionResult final {
 	fixed_point_t available_workforce = 0;
 	fixed_point_t labor_supported_capacity = 0;
 	std::optional<fixed_point_t> input_supported_output;
+	std::optional<fixed_point_t> external_supported_output;
+	bool external_limited = false;
 	bool labor_limited = false;
 	// The installed ceiling participates in min(installed, labor-supported).
 	// This does not claim unmet expansion demand, which this producer lacks.
@@ -44,6 +46,7 @@ private:
 	fixed_point_t utilization = 0;
 	bool workforce_constraint_enabled = false;
 	fixed_point_t available_workforce = 0;
+	std::optional<fixed_point_t> external_output_ceiling;
 	fixed_point_map_t<GoodDefinition const*> inventory;
 
 	[[nodiscard]] static fixed_point_t clamp_nonnegative(fixed_point_t value) {
@@ -90,6 +93,18 @@ public:
 		return workforce_constraint_enabled;
 	}
 
+	void set_external_output_ceiling(fixed_point_t value) {
+		external_output_ceiling = clamp_nonnegative(value);
+	}
+
+	void clear_external_output_ceiling() {
+		external_output_ceiling.reset();
+	}
+
+	[[nodiscard]] std::optional<fixed_point_t> get_external_output_ceiling() const {
+		return external_output_ceiling;
+	}
+
 	[[nodiscard]] fixed_point_t calculate_labor_supported_capacity() const {
 		if (!workforce_constraint_enabled) {
 			return capacity;
@@ -124,7 +139,17 @@ public:
 			capacity,
 			calculate_labor_supported_capacity()
 		);
-		return production_type.base_output_quantity * effective_capacity * utilization;
+
+		fixed_point_t desired =
+			production_type.base_output_quantity *
+			effective_capacity *
+			utilization;
+
+		if (external_output_ceiling.has_value()) {
+			desired = std::min(desired, *external_output_ceiling);
+		}
+
+		return desired;
 	}
 
 	[[nodiscard]] AggregateProductionResult produce() {
@@ -141,7 +166,18 @@ public:
 		result.workforce_required = capacity * fixed_point_t { type_safe::get(production_type.base_workforce_size) };
 		result.available_workforce = available_workforce;
 		result.labor_supported_capacity = calculate_labor_supported_capacity();
-		result.labor_limited = desired_output < result.potential_output;
+		result.external_supported_output = external_output_ceiling;
+		result.external_limited =
+			external_output_ceiling.has_value() &&
+			*external_output_ceiling <
+				production_type.base_output_quantity *
+				std::min(capacity, result.labor_supported_capacity) *
+				utilization;
+		result.labor_limited =
+			production_type.base_output_quantity *
+				std::min(capacity, result.labor_supported_capacity) *
+				utilization <
+			result.potential_output;
 		result.installed_ceiling_active = capacity <= result.labor_supported_capacity;
 		result.utilization_limited = utilization < fixed_point_t::_1
 			&& production_type.base_output_quantity * capacity > fixed_point_t::_0;

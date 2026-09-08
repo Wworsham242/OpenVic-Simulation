@@ -17,6 +17,7 @@
 #include "openvic-simulation/economy/production/AggregateProducerMarketBridge.hpp"
 #include "openvic-simulation/economy/production/WorkforceAllocation.hpp"
 #include "openvic-simulation/economy/production/ProductiveSiteMaterialFlowResolver.hpp"
+#include "openvic-simulation/economy/production/ProductiveSiteUtilityResolver.hpp"
 #include "openvic-simulation/economy/trading/LogisticsGraph.hpp"
 #include "openvic-simulation/economy/trading/MarketNodeAccess.hpp"
 #include "openvic-simulation/economy/trading/SharedTransportCapacity.hpp"
@@ -189,6 +190,7 @@ private:
 	LogisticsGraph logistics_graph;
 	std::vector<ResourceGraphRoute> resource_graph_routes;
 	std::vector<ProductiveSiteResourceRoute> upstream_site_resource_routes;
+	std::vector<ProductiveSiteUtilityRequirement> upstream_site_utility_requirements;
 	std::vector<SharedTransportCapacity> shared_transport_capacities;
 
 	GoodDefinition const& intermediate_good;
@@ -338,6 +340,30 @@ private:
 		status.intermediate_quantity_traded_yesterday =
 			market.get_quantity_traded_yesterday();
 	}
+    void apply_upstream_site_utility_constraints() {
+        std::vector<ProductiveSiteUtilityTarget> targets;
+        targets.reserve(1 + additional_upstream_sites.size());
+
+        targets.push_back(ProductiveSiteUtilityTarget {
+            .employer_id = upstream_employer_id.empty()
+                ? std::string { "site:primary" }
+                : upstream_employer_id,
+            .producer = &upstream
+        });
+
+        for (auto& site : additional_upstream_sites) {
+            targets.push_back(ProductiveSiteUtilityTarget {
+                .employer_id = site->employer_id,
+                .producer = &site->producer
+            });
+        }
+
+        ProductiveSiteUtilityResolver::apply(
+            targets,
+            upstream_site_utility_requirements
+        );
+    }
+
     [[nodiscard]] ResourceFlowResult
     fulfill_source_flows_across_upstream_sites() {
         std::vector<ProductiveSiteMaterialInput> inputs;
@@ -998,6 +1024,73 @@ preallocated_upstream_workforce = allocation;
 
 
 
+	[[nodiscard]] bool configure_upstream_site_utility_requirements(
+		std::vector<ProductiveSiteUtilityRequirement> requirements
+	) {
+		for (ProductiveSiteUtilityRequirement const& requirement :
+				requirements) {
+			if (
+				requirement.employer_id.empty() ||
+				requirement.required_per_output < fixed_point_t::_0 ||
+				requirement.available_per_tick < fixed_point_t::_0
+			) {
+				return false;
+			}
+		}
+
+		std::sort(
+			requirements.begin(),
+			requirements.end(),
+			[](ProductiveSiteUtilityRequirement const& lhs,
+				ProductiveSiteUtilityRequirement const& rhs) {
+				if (lhs.employer_id != rhs.employer_id) {
+					return lhs.employer_id < rhs.employer_id;
+				}
+				return static_cast<int>(lhs.kind) <
+					static_cast<int>(rhs.kind);
+			}
+		);
+
+		for (size_t i = 1; i < requirements.size(); ++i) {
+			if (
+				requirements[i - 1].employer_id ==
+					requirements[i].employer_id &&
+				requirements[i - 1].kind ==
+					requirements[i].kind
+			) {
+				return false;
+			}
+		}
+
+		upstream_site_utility_requirements =
+			std::move(requirements);
+		return true;
+	}
+
+	[[nodiscard]] bool set_upstream_site_utility_availability(
+		std::string_view employer_id,
+		ProductiveSiteUtilityKind kind,
+		fixed_point_t available_per_tick
+	) {
+		if (available_per_tick < fixed_point_t::_0) {
+			return false;
+		}
+
+		for (ProductiveSiteUtilityRequirement& requirement :
+				upstream_site_utility_requirements) {
+			if (
+				requirement.employer_id == employer_id &&
+				requirement.kind == kind
+			) {
+				requirement.available_per_tick =
+					available_per_tick;
+				return true;
+			}
+		}
+
+		return false;
+	}
+
 	[[nodiscard]] bool set_logistics_graph_edge_open(
 		std::string_view edge_id,
 		bool open
@@ -1062,6 +1155,8 @@ pending_provenance->workforce =
 }
 preallocated_upstream_workforce.reset();
 }
+		apply_upstream_site_utility_constraints();
+
 		ResourceFlowResult const source_flow =
 			fulfill_source_flows_across_upstream_sites();
 

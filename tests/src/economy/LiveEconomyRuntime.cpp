@@ -2166,3 +2166,109 @@ TEST_CASE(
 
 	CHECK(runtime.get_status().upstream_output == fixed_point_t { 2 });
 }
+
+TEST_CASE(
+	"Electricity and industrial water constrain production before material demand",
+	"[economy][utilities][electricity][water][b8]"
+) {
+	LiveEconomyFixture fixture;
+	GoodInstanceManager goods { fixture.definitions, fixture.rules };
+	auto scenario = fixture.make_scenario();
+	LiveEconomyRuntime runtime { fixture.rules, goods, scenario };
+
+	REQUIRE(
+		runtime.configure_upstream_site_utility_requirements(
+			{
+				ProductiveSiteUtilityRequirement {
+					.employer_id = "site:primary",
+					.kind = ProductiveSiteUtilityKind::Electricity,
+					.required_per_output = fixed_point_t { 2 },
+					.available_per_tick = fixed_point_t { 4 }
+				},
+				ProductiveSiteUtilityRequirement {
+					.employer_id = "site:primary",
+					.kind = ProductiveSiteUtilityKind::IndustrialWater,
+					.required_per_output = fixed_point_t::_1,
+					.available_per_tick = fixed_point_t { 3 }
+				}
+			}
+		)
+	);
+
+	GoodInstance& intermediate_market =
+		goods.get_good_instance_by_definition(*fixture.intermediate);
+
+	auto cycle = [&]() {
+		runtime.pre_market_daily_tick();
+		execute_intermediate_market(intermediate_market);
+		runtime.post_market_daily_tick();
+	};
+
+	cycle();
+
+	auto first = runtime.get_latest_provenance();
+	REQUIRE(first.has_value());
+	CHECK(first->upstream.external_limited);
+	REQUIRE(first->upstream.external_supported_output.has_value());
+	CHECK(
+		*first->upstream.external_supported_output ==
+			fixed_point_t { 2 }
+	);
+	CHECK(first->upstream.desired_output == fixed_point_t { 2 });
+	CHECK(first->upstream.actual_output == fixed_point_t { 2 });
+
+	AggregateProducer& producer =
+		runtime.get_upstream_producer_for_workforce_allocation();
+
+	// Utility ceiling is applied before material shortfall is calculated,
+	// so only two units of feedstock are requested/consumed this cycle.
+	CHECK(
+		producer.get_inventory(*fixture.feedstock) ==
+			fixed_point_t::_0
+	);
+
+	REQUIRE(
+		runtime.set_upstream_site_utility_availability(
+			"site:primary",
+			ProductiveSiteUtilityKind::Electricity,
+			fixed_point_t { 8 }
+		)
+	);
+
+	cycle();
+
+	auto water_limited = runtime.get_latest_provenance();
+	REQUIRE(water_limited.has_value());
+	CHECK(water_limited->upstream.external_limited);
+	REQUIRE(
+		water_limited->upstream.external_supported_output.has_value()
+	);
+	CHECK(
+		*water_limited->upstream.external_supported_output ==
+			fixed_point_t { 3 }
+	);
+	CHECK(
+		water_limited->upstream.actual_output ==
+			fixed_point_t { 3 }
+	);
+
+	REQUIRE(
+		runtime.set_upstream_site_utility_availability(
+			"site:primary",
+			ProductiveSiteUtilityKind::IndustrialWater,
+			fixed_point_t { 4 }
+		)
+	);
+
+	cycle();
+
+	auto full = runtime.get_latest_provenance();
+	REQUIRE(full.has_value());
+	CHECK_FALSE(full->upstream.external_limited);
+	REQUIRE(full->upstream.external_supported_output.has_value());
+	CHECK(
+		*full->upstream.external_supported_output ==
+			fixed_point_t { 4 }
+	);
+	CHECK(full->upstream.actual_output == fixed_point_t { 4 });
+}
