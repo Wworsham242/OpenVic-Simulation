@@ -1725,3 +1725,250 @@ TEST_CASE(
         // Binding-call order does not change authoritative outcomes.
         CHECK(secondary_first == primary_first);
 }
+
+TEST_CASE(
+"Site-specific physical input access isolates one productive-site disruption",
+"[economy][productive-site][logistics][site-access][determinism][b6]"
+) {
+        struct Result final {
+                fixed_point_t primary_allocated = fixed_point_t::_0;
+                fixed_point_t secondary_allocated = fixed_point_t::_0;
+                fixed_point_t primary_output = fixed_point_t::_0;
+                fixed_point_t secondary_output = fixed_point_t::_0;
+                fixed_point_t total_output = fixed_point_t::_0;
+                fixed_point_t market_supply = fixed_point_t::_0;
+                fixed_point_t market_traded = fixed_point_t::_0;
+                fixed_point_t source_unmet = fixed_point_t::_0;
+                pop_size_t unemployed = 0;
+
+                bool operator==(Result const&) const = default;
+        };
+
+        auto run = [](bool disrupt_primary, bool reverse_route_order) {
+                BoundWorldFixture world;
+
+                world.plant().set_level(building_level_t { 2 });
+                world.plant_b().set_level(building_level_t { 2 });
+                world.replace_population("1", 80);
+
+                LiveEconomyScenarioDefinition scenario =
+                        world.economy.make_scenario();
+
+                scenario.source_inflow_per_daily_tick =
+                        fixed_point_t { 8 };
+
+                REQUIRE(!scenario.corridor_legs.empty());
+                scenario.corridor_legs[0].nominal_capacity =
+                        fixed_point_t { 8 };
+
+                LiveEconomyRuntime runtime {
+                        world.economy.rules,
+                        world.goods,
+                        scenario
+                };
+
+                ProductiveSiteBinding secondary {
+                        "1",
+                        "plant_b",
+                        "live_upstream",
+                        LaborPoolScope::ProvinceLocal
+                };
+
+                REQUIRE(
+                        runtime.bind_upstream_site(
+                                world.binding,
+                                *world.map
+                        )
+                );
+
+                REQUIRE(
+                        runtime.bind_additional_upstream_site(
+                                secondary,
+                                *world.map
+                        )
+                );
+
+                REQUIRE(
+                        runtime.configure_logistics_graph(
+                                {
+                                        LogisticsGraphEdge {
+                                                .edge_id = "feedstock_to_primary",
+                                                .source = market_node_index_t { 0 },
+                                                .destination = market_node_index_t { 10 },
+                                                .leg = TransportLeg {
+                                                        .nominal_capacity =
+                                                                fixed_point_t { 8 },
+                                                        .availability_fraction =
+                                                                fixed_point_t::_1,
+                                                        .open = true
+                                                }
+                                        },
+                                        LogisticsGraphEdge {
+                                                .edge_id = "feedstock_to_secondary",
+                                                .source = market_node_index_t { 0 },
+                                                .destination = market_node_index_t { 20 },
+                                                .leg = TransportLeg {
+                                                        .nominal_capacity =
+                                                                fixed_point_t { 8 },
+                                                        .availability_fraction =
+                                                                fixed_point_t::_1,
+                                                        .open = true
+                                                }
+                                        }
+                                }
+                        )
+                );
+
+                ProductiveSiteResourceRoute primary_route {
+                        .employer_id = "site:1:plant",
+                        .source_node = market_node_index_t { 0 },
+                        .destination_node = market_node_index_t { 10 }
+                };
+
+                ProductiveSiteResourceRoute secondary_route {
+                        .employer_id = "site:1:plant_b",
+                        .source_node = market_node_index_t { 0 },
+                        .destination_node = market_node_index_t { 20 }
+                };
+
+                std::vector<ProductiveSiteResourceRoute> routes =
+                        reverse_route_order
+                                ? std::vector<ProductiveSiteResourceRoute> {
+                                        secondary_route,
+                                        primary_route
+                                }
+                                : std::vector<ProductiveSiteResourceRoute> {
+                                        primary_route,
+                                        secondary_route
+                                };
+
+                REQUIRE(
+                        runtime.configure_upstream_site_resource_routes(
+                                std::move(routes)
+                        )
+                );
+
+                if (disrupt_primary) {
+                        REQUIRE(
+                                runtime.set_logistics_graph_edge_open(
+                                        "feedstock_to_primary",
+                                        false
+                                )
+                        );
+                }
+
+                world.map->prepare_employment_phase();
+
+                auto requests =
+                        runtime.prepare_upstream_employer_requests(
+                                *world.map
+                        );
+
+                auto allocations =
+                        world.map->allocate_employment_phase(
+                                std::move(requests)
+                        );
+
+                runtime.apply_upstream_employer_allocations(
+                        allocations
+                );
+
+                world.map->finish_rgo_production();
+
+                SimulationTimeline timeline;
+                REQUIRE(timeline.advance(24));
+
+                runtime.run_due_daily_cycles(
+                        SimTime { 0 },
+                        timeline.current_time(),
+                        [&](SimTime) -> std::optional<WorkforcePool> {
+                                return std::nullopt;
+                        },
+                        [&]() {
+                                execute_intermediate_market(
+                                        world.goods
+                                                .get_good_instance_by_definition(
+                                                        *world.economy.intermediate
+                                                )
+                                );
+                        }
+                );
+
+                auto provenance = runtime.get_latest_provenance();
+                REQUIRE(provenance.has_value());
+                REQUIRE(provenance->workforce.has_value());
+
+                auto secondary_workforce =
+                        runtime.get_additional_upstream_previous_workforce(0);
+
+                auto secondary_production =
+                        runtime.get_additional_upstream_last_production(0);
+
+                REQUIRE(secondary_workforce.has_value());
+                REQUIRE(secondary_production != nullptr);
+
+                auto status = runtime.get_status();
+
+                return Result {
+                        .primary_allocated =
+                                provenance->workforce->allocated,
+                        .secondary_allocated =
+                                secondary_workforce->allocated,
+                        .primary_output =
+                                provenance->upstream.actual_output,
+                        .secondary_output =
+                                secondary_production->actual_output,
+                        .total_output =
+                                status.upstream_output,
+                        .market_supply =
+                                status.intermediate_supply_yesterday,
+                        .market_traded =
+                                status.intermediate_quantity_traded_yesterday,
+                        .source_unmet =
+                                status.source_unmet_inflow,
+                        .unemployed =
+                                world.province("1")
+                                        .get_mutable_pops()
+                                        .begin()
+                                        ->get_unemployed()
+                };
+        };
+
+        Result const open = run(false, false);
+        Result const open_reversed = run(false, true);
+        Result const disrupted = run(true, false);
+        Result const disrupted_reversed = run(true, true);
+
+        CHECK(open_reversed == open);
+        CHECK(disrupted_reversed == disrupted);
+
+        CHECK(open.primary_allocated == fixed_point_t { 40 });
+        CHECK(open.secondary_allocated == fixed_point_t { 40 });
+        CHECK(open.primary_output == fixed_point_t { 4 });
+        CHECK(open.secondary_output == fixed_point_t { 4 });
+        CHECK(open.total_output == fixed_point_t { 8 });
+        CHECK(open.market_supply == fixed_point_t { 8 });
+        CHECK(open.market_traded == fixed_point_t { 8 });
+        CHECK(open.source_unmet == fixed_point_t::_0);
+        CHECK(open.unemployed == pop_size_t { 0 });
+
+        CHECK(disrupted.primary_allocated == open.primary_allocated);
+        CHECK(disrupted.secondary_allocated == open.secondary_allocated);
+        CHECK(disrupted.unemployed == open.unemployed);
+        CHECK(disrupted.primary_output == fixed_point_t::_0);
+        CHECK(disrupted.secondary_output == open.secondary_output);
+
+        CHECK(
+                open.total_output - disrupted.total_output
+                == open.primary_output
+        );
+        CHECK(
+                open.market_supply - disrupted.market_supply
+                == open.primary_output
+        );
+        CHECK(
+                open.market_traded - disrupted.market_traded
+                == open.primary_output
+        );
+        CHECK(disrupted.source_unmet == open.primary_output);
+}
