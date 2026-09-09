@@ -46,9 +46,14 @@ std::string_view employer_id;
 fixed_point_t labor_offer = 0;
 fixed_point_t requested = 0;
 
+// Distinct from labor_offer. labor_offer ranks employers; compensation_per_worker
+// is actual gross worker compensation paid when an assignment is committed.
+fixed_point_t compensation_per_worker = 0;
+
 void* employer = nullptr;
 bool (*accepts)(void*, Pop const&) = nullptr;
 pop_size_t (*assign)(void*, Pop&, pop_size_t) = nullptr;
+void (*compensate)(void*, Pop&, pop_size_t, fixed_point_t) = nullptr;
 
 bool operator==(WorkforceEmployerRequest const&) const = default;
 };
@@ -83,5 +88,6 @@ fixed_point_t labor_offer
 [[nodiscard]] WorkforceEmployerRequest make_producer_workforce_request(
 AggregateProducer& producer,
 std::string_view employer_id,
-fixed_point_t labor_offer
+fixed_point_t labor_offer,
+fixed_point_t compensation_per_worker = fixed_point_t::_0
 );}

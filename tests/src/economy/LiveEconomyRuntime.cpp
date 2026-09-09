@@ -3767,17 +3767,113 @@ TEST_CASE(
 	CHECK(economics->actual_output == fixed_point_t { 4 });
 	CHECK(economics->material_replacement_cost >= fixed_point_t::_0);
 
-	// Labor offer is not a wage. Runtime labor cost remains zero until a
-	// dedicated wage/compensation mechanism supplies an authoritative value.
-	CHECK(economics->labor_cost_proxy == fixed_point_t::_0);
+	// Labor offer is not a wage. With no configured B16 compensation rate,
+	// labor compensation remains zero.
+	CHECK(economics->labor_compensation_cost == fixed_point_t::_0);
 
 	CHECK(economics->logistics_cost_proxy == fixed_point_t { 4 });
 	CHECK(
 		economics->total_operating_cost ==
 		economics->market_cash_spend +
 		economics->material_replacement_cost +
-		economics->labor_cost_proxy +
+		economics->labor_compensation_cost +
 		economics->electricity_cost_proxy +
 		economics->logistics_cost_proxy
+	);
+}
+
+TEST_CASE(
+	"Authoritative productive-site assignment pays exact POP compensation",
+	"[economy][labor-compensation][pop-income][b16]"
+) {
+	BoundWorldFixture world;
+
+	world.replace_population("1", 40);
+	auto& pop = *world.province("1").get_mutable_pops().begin();
+
+	fixed_point_t const before_income =
+		pop.get_factory_worker_income();
+	fixed_point_t const before_cash =
+		pop.get_cash().get_copy_of_value();
+
+	REQUIRE(
+		world.runtime.set_upstream_site_compensation_per_worker(
+			"site:1:plant",
+			fixed_point_t { 2 }
+		)
+	);
+
+	world.cycle();
+
+	auto provenance = world.runtime.get_latest_provenance();
+	REQUIRE(provenance.has_value());
+	REQUIRE(provenance->workforce.has_value());
+	CHECK(provenance->workforce->allocated == fixed_point_t { 40 });
+
+	// No country owner is attached in this fixture, so there is no income tax.
+	CHECK(
+		pop.get_factory_worker_income() - before_income ==
+		fixed_point_t { 80 }
+	);
+	CHECK(
+		pop.get_cash().get_copy_of_value() - before_cash ==
+		fixed_point_t { 80 }
+	);
+
+	auto economics =
+		world.runtime.get_upstream_operating_economics();
+	REQUIRE(economics.has_value());
+	CHECK(
+		economics->labor_compensation_cost ==
+		fixed_point_t { 80 }
+	);
+}
+
+TEST_CASE(
+	"Compensation rate is distinct from employer labor offer",
+	"[economy][labor-compensation][labor-offer][b16]"
+) {
+	BoundWorldFixture low_wage;
+	BoundWorldFixture high_wage;
+
+	low_wage.replace_population("1", 40);
+	high_wage.replace_population("1", 40);
+
+	REQUIRE(
+		low_wage.runtime.set_upstream_site_compensation_per_worker(
+			"site:1:plant",
+			fixed_point_t::_0
+		)
+	);
+	REQUIRE(
+		high_wage.runtime.set_upstream_site_compensation_per_worker(
+			"site:1:plant",
+			fixed_point_t { 1 }
+		)
+	);
+
+	low_wage.cycle();
+	high_wage.cycle();
+
+	auto low =
+		low_wage.runtime.get_upstream_operating_economics();
+	auto high =
+		high_wage.runtime.get_upstream_operating_economics();
+
+	REQUIRE(low.has_value());
+	REQUIRE(high.has_value());
+
+	CHECK(low->labor_compensation_cost == fixed_point_t::_0);
+	CHECK(high->labor_compensation_cost == fixed_point_t { 40 });
+	CHECK(
+		high->operating_surplus ==
+		low->operating_surplus - fixed_point_t { 40 }
+	);
+
+	// Wage cost changes economics; it does not become the labor-offer value.
+	CHECK(
+		high_wage.runtime.get_upstream_labor_offer() ==
+		std::max(high->operating_surplus, fixed_point_t::_0) /
+			fixed_point_t { 40 }
 	);
 }

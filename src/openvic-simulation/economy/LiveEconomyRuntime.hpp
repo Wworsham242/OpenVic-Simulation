@@ -135,6 +135,7 @@ private:
         AggregateMarketCycleResult last_market {};
         std::optional<ProductiveSiteOperatingEconomicsResult> last_economics;
         fixed_point_t labor_offer_used = fixed_point_t::_1;
+        fixed_point_t compensation_per_worker = fixed_point_t::_0;
 
         static std::string make_employer_id(
             ProductiveSiteBinding const& binding
@@ -232,6 +233,7 @@ private:
     std::optional<ProductiveSiteOperatingEconomicsResult>
         upstream_last_economics;
     fixed_point_t upstream_labor_offer_used = fixed_point_t::_1;
+    fixed_point_t upstream_compensation_per_worker = fixed_point_t::_0;
     std::vector<ProductiveSiteElectricityAllocation>
         latest_electricity_allocations;
 
@@ -411,22 +413,27 @@ private:
         AggregateProductionResult const& production,
         AggregateMarketCycleResult const& market,
         std::optional<WorkforceAllocationResult> const& allocation,
-        fixed_point_t labor_offer_used
+        fixed_point_t labor_offer_used,
+        fixed_point_t compensation_per_worker
     ) {
-        // B4B's labor_offer_used is an employer-priority/economic-capacity
-        // signal, not a wage. Do not feed it back as labor expense.
-        // A nonzero labor-cost component must come from an explicit wage/
-        // compensation mechanism in a later convergence increment.
-        (void)allocation;
+        // B4B's labor_offer_used remains an employer-priority signal.
+        // B16 compensation_per_worker is a distinct gross wage/compensation rate.
         (void)labor_offer_used;
-        fixed_point_t const labor_cost_proxy = fixed_point_t::_0;
+        fixed_point_t const labor_compensation_cost =
+            allocation.has_value()
+                ? allocation->allocated *
+                    std::max(
+                        compensation_per_worker,
+                        fixed_point_t::_0
+                    )
+                : fixed_point_t::_0;
 
         return ProductiveSiteOperatingEconomics::calculate(
             production.actual_output,
             market.money_received,
             market.money_spent,
             calculate_material_replacement_cost(producer, production),
-            labor_cost_proxy,
+            labor_compensation_cost,
             electricity_cost_proxy_for(employer_id),
             production.actual_output * corridor.calculate_unit_cost()
         );
@@ -775,7 +782,8 @@ preallocated_upstream_workforce = allocation;
                                     make_producer_workforce_request(
                                             upstream,
                                             upstream_employer_id,
-                                            upstream_labor_offer_used
+                                            upstream_labor_offer_used,
+                                            upstream_compensation_per_worker
                                     );
 
                             upstream_requested_workforce = request.requested;
@@ -820,7 +828,8 @@ preallocated_upstream_workforce = allocation;
                             make_producer_workforce_request(
                                     site->producer,
                                     site->employer_id,
-                                    site->labor_offer_used
+                                    site->labor_offer_used,
+                                    site->compensation_per_worker
                             );
 
                     site->requested_workforce = request.requested;
@@ -912,6 +921,39 @@ preallocated_upstream_workforce = allocation;
 		}
 		upstream.set_capacity(site->installed_capacity);
 		return site->workforce;
+	}
+
+	[[nodiscard]] bool set_upstream_site_compensation_per_worker(
+		std::string_view employer_id,
+		fixed_point_t compensation_per_worker
+	) {
+		if (
+			employer_id.empty() ||
+			compensation_per_worker < fixed_point_t::_0
+		) {
+			return false;
+		}
+
+		std::string const primary_id =
+			upstream_employer_id.empty()
+				? std::string { "site:primary" }
+				: upstream_employer_id;
+
+		if (employer_id == primary_id) {
+			upstream_compensation_per_worker =
+				compensation_per_worker;
+			return true;
+		}
+
+		for (auto& site : additional_upstream_sites) {
+			if (site->employer_id == employer_id) {
+				site->compensation_per_worker =
+					compensation_per_worker;
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	[[nodiscard]] bool set_upstream_capacity_from_facility(
@@ -1680,7 +1722,8 @@ preallocated_upstream_workforce.reset();
                             upstream_last_production,
                             upstream_last_market,
                             upstream_current_allocation,
-                            upstream_labor_offer_used
+                            upstream_labor_offer_used,
+                            upstream_compensation_per_worker
                     );
 
             upstream_previous_allocation =
@@ -1700,7 +1743,8 @@ preallocated_upstream_workforce.reset();
                                     site->last_production,
                                     site->last_market,
                                     site->current_allocation,
-                                    site->labor_offer_used
+                                    site->labor_offer_used,
+                                    site->compensation_per_worker
                             );
 
                     site->previous_allocation =

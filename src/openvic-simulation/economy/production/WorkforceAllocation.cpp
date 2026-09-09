@@ -139,6 +139,18 @@ type_safe::get(assigned)
 
 result.allocated += assigned_fp;
 remaining -= assigned_fp;
+
+if (
+request.compensation_per_worker > fixed_point_t::_0 &&
+request.compensate != nullptr
+) {
+request.compensate(
+request.employer,
+pop,
+assigned,
+request.compensation_per_worker
+);
+}
 }
 
 results.push_back(result);
@@ -196,6 +208,25 @@ return job.pop_type_index == pop.get_type().index;
 );
 }
 
+void producer_compensate_worker_adapter(
+void*,
+Pop& pop,
+pop_size_t assigned,
+fixed_point_t compensation_per_worker
+) {
+if (
+assigned <= 0 ||
+compensation_per_worker <= fixed_point_t::_0
+) {
+return;
+}
+
+pop.add_factory_worker_income(
+fixed_point_t { type_safe::get(assigned) } *
+compensation_per_worker
+);
+}
+
 pop_size_t producer_assign_worker_adapter(
 void* employer,
 Pop& pop,
@@ -240,7 +271,8 @@ return WorkforceEmployerRequest {
 WorkforceEmployerRequest OpenVic::make_producer_workforce_request(
 AggregateProducer& producer,
 std::string_view employer_id,
-fixed_point_t labor_offer
+fixed_point_t labor_offer,
+fixed_point_t compensation_per_worker
 ) {
 producer.set_available_workforce(fixed_point_t::_0);
 
@@ -252,8 +284,11 @@ return WorkforceEmployerRequest {
 .requested =
 producer.get_capacity()
 * fixed_point_t { type_safe::get(process.base_workforce_size) },
+.compensation_per_worker =
+std::max(compensation_per_worker, fixed_point_t::_0),
 .employer = &producer,
 .accepts = &producer_accepts_worker_adapter,
-.assign = &producer_assign_worker_adapter
+.assign = &producer_assign_worker_adapter,
+.compensate = &producer_compensate_worker_adapter
 };
 }
