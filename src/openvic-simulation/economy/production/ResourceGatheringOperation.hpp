@@ -1,10 +1,12 @@
 #pragma once
 
 #include <functional>
+#include <optional>
 
 #include "openvic-simulation/core/memory/FixedVector.hpp"
 #include "openvic-simulation/core/memory/Vector.hpp"
 #include "openvic-simulation/economy/production/Employee.hpp"
+#include "openvic-simulation/economy/production/AgriculturalProductionConstraint.hpp"
 #include "openvic-simulation/types/fixed_point/FixedPoint.hpp"
 #include "openvic-simulation/population/PopSize.hpp"
 #include "openvic-simulation/population/PopSum.hpp"
@@ -35,6 +37,8 @@ namespace OpenVic {
 		ProductionType const* PROPERTY_RW(production_type_nullable);
 		fixed_point_t PROPERTY(revenue_yesterday);
 		fixed_point_t PROPERTY(output_quantity_yesterday);
+		// Absent for non-farm or inactive RGOs; replaced on each production cycle.
+		std::optional<AgriculturalProductionConstraintResult> PROPERTY(agricultural_constraint_yesterday);
 		fixed_point_t PROPERTY(unsold_quantity_yesterday);
 		fixed_point_t PROPERTY_RW(size_multiplier);
 		memory::vector<Employee> SPAN_PROPERTY(employees);

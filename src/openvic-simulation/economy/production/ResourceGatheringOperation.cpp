@@ -262,6 +262,7 @@ void ResourceGatheringOperation::production_cycle(
 memory::vector<fixed_point_t>& reusable_vector
 ) {
 ProvinceInstance& location = *location_ptr;
+agricultural_constraint_yesterday.reset();
 
 if (production_type_nullable == nullptr || location.get_owner() == nullptr) {
 output_quantity_yesterday = 0;
@@ -272,6 +273,16 @@ return;
 ProductionType const& production_type = *production_type_nullable;
 
 output_quantity_yesterday = produce();
+
+// Consume authoritative physical conditions after the unchanged native equation,
+// before country reporting and the native market sell order.
+if (production_type.template_type == ProductionType::template_type_t::RGO
+	&& production_type.get_is_farm_for_non_tech()) {
+	agricultural_constraint_yesterday = constrain_agricultural_production(
+		location.get_environmental_state(), output_quantity_yesterday
+	);
+	output_quantity_yesterday = agricultural_constraint_yesterday->constrained_output;
+}
 
 if (output_quantity_yesterday <= 0) {
 return;

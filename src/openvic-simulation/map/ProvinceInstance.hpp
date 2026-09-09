@@ -9,6 +9,7 @@
 #include "openvic-simulation/core/stl/containers/TypedSpan.hpp"
 #include "openvic-simulation/economy/BuildingInstance.hpp"
 #include "openvic-simulation/economy/production/ResourceGatheringOperation.hpp"
+#include "openvic-simulation/environment/ProvinceEnvironmentalState.hpp"
 #include "openvic-simulation/map/LifeRating.hpp"
 #include "openvic-simulation/military/UnitBranchedGetterMacro.hpp"
 #include "openvic-simulation/modifier/ModifierSum.hpp"
@@ -75,6 +76,8 @@ namespace OpenVic {
 		GameRulesManager const& game_rules_manager;
 
 		TerrainType const* PROPERTY(terrain_type);
+		// Neutral by default; physical conditions can be replaced by domain producers.
+		ProvinceEnvironmentalState PROPERTY_RW(environmental_state);
 		life_rating_t PROPERTY(life_rating, life_rating_t { 0 });
 		colony_status_t PROPERTY(colony_status, colony_status_t::STATE);
 		State* PROPERTY_PTR(state, nullptr);
