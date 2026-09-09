@@ -69,6 +69,10 @@ struct ProductiveSiteElectricityAllocation final {
 	fixed_point_t requested = fixed_point_t::_0;
 	fixed_point_t transmission_allocated = fixed_point_t::_0;
 	fixed_point_t delivered = fixed_point_t::_0;
+
+	// Imputed generation cost from actual source->load dispatch quantities
+	// multiplied by each source's marginal-cost proxy.
+	fixed_point_t generation_cost_proxy = fixed_point_t::_0;
 };
 
 [[nodiscard]] inline fixed_point_t
@@ -807,6 +811,33 @@ public:
 				load_copy,
 				actual_deliveries
 			);
+		}
+
+		for (SourceLoadDelivery const& delivery : actual_deliveries) {
+			auto const source_it = std::find_if(
+				sources.begin(),
+				sources.end(),
+				[&delivery](ProductiveSiteElectricitySource const& source) {
+					return source.source_id == delivery.source_id;
+				}
+			);
+
+			auto const result_it = std::find_if(
+				results.begin(),
+				results.end(),
+				[&delivery](ProductiveSiteElectricityAllocation const& result) {
+					return result.employer_id == delivery.employer_id;
+				}
+			);
+
+			if (source_it != sources.end() && result_it != results.end()) {
+				result_it->generation_cost_proxy +=
+					delivery.delivered *
+					std::max(
+						source_it->marginal_cost,
+						fixed_point_t::_0
+					);
+			}
 		}
 
 		for (ProductiveSiteElectricitySource& source : sources) {

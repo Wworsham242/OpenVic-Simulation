@@ -3621,3 +3621,163 @@ TEST_CASE(
 	CHECK(outage->upstream.external_limited);
 	CHECK(outage->upstream.actual_output == fixed_point_t::_0);
 }
+
+TEST_CASE(
+	"Productive site operating economics decomposes costs and labor signal",
+	"[economy][operating-economics][b15]"
+) {
+	auto result = ProductiveSiteOperatingEconomics::calculate(
+		fixed_point_t { 4 },
+		fixed_point_t { 30 },
+		fixed_point_t { 2 },
+		fixed_point_t { 8 },
+		fixed_point_t { 4 },
+		fixed_point_t { 3 },
+		fixed_point_t { 1 }
+	);
+
+	CHECK(result.total_operating_cost == fixed_point_t { 18 });
+	CHECK(result.operating_surplus == fixed_point_t { 12 });
+	REQUIRE(result.operating_cost_per_output.has_value());
+	CHECK(*result.operating_cost_per_output ==
+		fixed_point_t { 18 } / fixed_point_t { 4 });
+
+	CHECK(
+		ProductiveSiteOperatingEconomics::labor_offer_from_prior_economics(
+			result,
+			fixed_point_t { 3 }
+		) == fixed_point_t { 4 }
+	);
+
+	result.market_revenue = fixed_point_t::_0;
+	result.operating_surplus = -fixed_point_t { 5 };
+
+	CHECK(
+		ProductiveSiteOperatingEconomics::labor_offer_from_prior_economics(
+			result,
+			fixed_point_t { 3 }
+		) == fixed_point_t::_0
+	);
+}
+
+TEST_CASE(
+	"Electricity allocation reports dispatch-derived generation cost",
+	"[economy][operating-economics][electricity-cost][b15]"
+) {
+	LiveEconomyFixture fixture;
+
+	AggregateProducer plant {
+		"costed-power-load",
+		*fixture.upstream_process,
+		fixed_point_t { 2 },
+		fixed_point_t::_1
+	};
+
+	std::vector<ProductiveSiteUtilityTarget> targets {
+		{
+			.employer_id = "costed-power-load",
+			.producer = &plant
+		}
+	};
+
+	std::vector<ProductiveSiteUtilityRequirement> requirements {
+		{
+			.employer_id = "costed-power-load",
+			.kind = ProductiveSiteUtilityKind::Electricity,
+			.required_per_output = fixed_point_t::_1,
+			.available_per_tick = fixed_point_t::_0
+		}
+	};
+
+	LogisticsGraph transmission;
+	REQUIRE(
+		transmission.configure(
+			{
+				LogisticsGraphEdge {
+					.edge_id = "costed-power-line",
+					.source = market_node_index_t { 0 },
+					.destination = market_node_index_t { 10 },
+					.leg = TransportLeg {
+						.nominal_capacity = fixed_point_t { 2 }
+					}
+				}
+			}
+		)
+	);
+
+	std::vector<ProductiveSiteElectricitySource> sources {
+		ProductiveSiteElectricitySource {
+			.source_id = "costed-generator",
+			.source_node = market_node_index_t { 0 },
+			.available_generation_per_tick = fixed_point_t { 2 },
+			.ramp_up_per_tick = fixed_point_t { 2 },
+			.ramp_down_per_tick = fixed_point_t { 2 },
+			.marginal_cost = fixed_point_t { 3 }
+		}
+	};
+
+	auto allocations =
+		ProductiveSiteElectricityGridResolver::resolve_sources_stateful(
+			sources,
+			transmission,
+			{
+				ProductiveSiteElectricityConnection {
+					.employer_id = "costed-power-load",
+					.destination_node = market_node_index_t { 10 }
+				}
+			},
+			targets,
+			requirements
+		);
+
+	REQUIRE(allocations.size() == 1);
+	CHECK(allocations[0].delivered == fixed_point_t { 2 });
+	CHECK(allocations[0].generation_cost_proxy == fixed_point_t { 6 });
+}
+
+TEST_CASE(
+	"Operating economics remains authoritative with provenance disabled",
+	"[economy][operating-economics][provenance-independent][runtime][b15]"
+) {
+	LiveEconomyFixture fixture;
+	GoodInstanceManager goods { fixture.definitions, fixture.rules };
+
+	auto scenario = fixture.make_scenario();
+	scenario.corridor_legs.front().unit_cost = fixed_point_t { 1 };
+
+	LiveEconomyRuntime runtime {
+		fixture.rules,
+		goods,
+		scenario,
+		false
+	};
+
+	GoodInstance& intermediate_market =
+		goods.get_good_instance_by_definition(*fixture.intermediate);
+
+	runtime.pre_market_daily_tick();
+	execute_intermediate_market(intermediate_market);
+	runtime.post_market_daily_tick();
+
+	CHECK(!runtime.get_latest_provenance().has_value());
+
+	auto economics = runtime.get_upstream_operating_economics();
+	REQUIRE(economics.has_value());
+
+	CHECK(economics->actual_output == fixed_point_t { 4 });
+	CHECK(economics->material_replacement_cost >= fixed_point_t::_0);
+
+	// Labor offer is not a wage. Runtime labor cost remains zero until a
+	// dedicated wage/compensation mechanism supplies an authoritative value.
+	CHECK(economics->labor_cost_proxy == fixed_point_t::_0);
+
+	CHECK(economics->logistics_cost_proxy == fixed_point_t { 4 });
+	CHECK(
+		economics->total_operating_cost ==
+		economics->market_cash_spend +
+		economics->material_replacement_cost +
+		economics->labor_cost_proxy +
+		economics->electricity_cost_proxy +
+		economics->logistics_cost_proxy
+	);
+}

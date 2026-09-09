@@ -8,6 +8,7 @@
 #include "openvic-simulation/economy/production/AggregateProducer.hpp"
 #include "openvic-simulation/economy/production/AggregateProducerMarketBridge.hpp"
 #include "openvic-simulation/economy/production/WorkforceAllocation.hpp"
+#include "openvic-simulation/economy/production/ProductiveSiteOperatingEconomics.hpp"
 #include "openvic-simulation/economy/trading/DeliverableSupply.hpp"
 #include "openvic-simulation/resources/ResourceSupplyNetwork.hpp"
 
@@ -28,6 +29,7 @@ struct LiveEconomyCycleProvenance final {
 	// Absent when no native allocation occurred (including manual workforce).
 	std::optional<WorkforceAllocationResult> workforce;
 	AggregateProductionResult upstream;
+	std::optional<ProductiveSiteOperatingEconomicsResult> upstream_economics;
 	DeliverableSupply logistics;
 	AggregateMarketCycleResult upstream_market;
 	AggregateMarketCycleResult downstream_market;

@@ -18,6 +18,10 @@ struct TransportLeg final {
 	fixed_point_t availability_fraction = fixed_point_t::_1;
 	bool open = true;
 
+	// Coarse monetary cost per physical unit moved across this leg.
+	// Capacity/access remain physical constraints; this is valuation only.
+	fixed_point_t unit_cost = fixed_point_t::_0;
+
 	[[nodiscard]] fixed_point_t calculate_effective_capacity() const {
 		if (!open || nominal_capacity <= 0 || availability_fraction <= 0) {
 			return 0;
@@ -68,6 +72,18 @@ public:
 
 	[[nodiscard]] size_t get_leg_count() const {
 		return legs.size();
+	}
+
+	[[nodiscard]] fixed_point_t calculate_unit_cost() const {
+		fixed_point_t total = fixed_point_t::_0;
+
+		for (TransportLeg const& leg : legs) {
+			if (leg.open) {
+				total += std::max(leg.unit_cost, fixed_point_t::_0);
+			}
+		}
+
+		return total;
 	}
 
 	[[nodiscard]] fixed_point_t calculate_bottleneck_capacity() const {

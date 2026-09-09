@@ -19,6 +19,7 @@
 #include "openvic-simulation/economy/production/ProductiveSiteMaterialFlowResolver.hpp"
 #include "openvic-simulation/economy/production/ProductiveSiteUtilityResolver.hpp"
 #include "openvic-simulation/economy/production/ProductiveSiteElectricityGridResolver.hpp"
+#include "openvic-simulation/economy/production/ProductiveSiteOperatingEconomics.hpp"
 #include "openvic-simulation/economy/trading/LogisticsGraph.hpp"
 #include "openvic-simulation/economy/trading/MarketNodeAccess.hpp"
 #include "openvic-simulation/economy/trading/SharedTransportCapacity.hpp"
@@ -132,6 +133,8 @@ private:
         std::optional<WorkforceAllocationResult> previous_allocation;
         AggregateProductionResult last_production {};
         AggregateMarketCycleResult last_market {};
+        std::optional<ProductiveSiteOperatingEconomicsResult> last_economics;
+        fixed_point_t labor_offer_used = fixed_point_t::_1;
 
         static std::string make_employer_id(
             ProductiveSiteBinding const& binding
@@ -168,12 +171,16 @@ private:
                 return no_history_offer;
             }
 
-            fixed_point_t const operating_surplus = std::max(
-                last_market.money_received - last_market.money_spent,
-                fixed_point_t::_0
-            );
+            if (!last_economics.has_value()) {
+                return no_history_offer;
+            }
 
-            return operating_surplus / previous_allocation->allocated;
+            return ProductiveSiteOperatingEconomics::
+                labor_offer_from_prior_economics(
+                    *last_economics,
+                    previous_allocation->allocated,
+                    no_history_offer
+                );
         }
     };
 
@@ -218,6 +225,15 @@ private:
     std::string upstream_employer_id;
     fixed_point_t upstream_requested_workforce = fixed_point_t::_0;
     std::optional<WorkforceAllocationResult> preallocated_upstream_workforce;
+    std::optional<WorkforceAllocationResult> upstream_current_allocation;
+    std::optional<WorkforceAllocationResult> upstream_previous_allocation;
+    AggregateProductionResult upstream_last_production {};
+    AggregateMarketCycleResult upstream_last_market {};
+    std::optional<ProductiveSiteOperatingEconomicsResult>
+        upstream_last_economics;
+    fixed_point_t upstream_labor_offer_used = fixed_point_t::_1;
+    std::vector<ProductiveSiteElectricityAllocation>
+        latest_electricity_allocations;
 
     // Stable-address ownership is required because each market bridge
     // retains an AggregateProducer&.
@@ -345,6 +361,77 @@ private:
 		status.intermediate_quantity_traded_yesterday =
 			market.get_quantity_traded_yesterday();
 	}
+    [[nodiscard]] fixed_point_t electricity_cost_proxy_for(
+        std::string_view employer_id
+    ) const {
+        auto const it = std::find_if(
+            latest_electricity_allocations.begin(),
+            latest_electricity_allocations.end(),
+            [employer_id](ProductiveSiteElectricityAllocation const& allocation) {
+                return allocation.employer_id == employer_id;
+            }
+        );
+
+        return it != latest_electricity_allocations.end()
+            ? it->generation_cost_proxy
+            : fixed_point_t::_0;
+    }
+
+    [[nodiscard]] fixed_point_t calculate_material_replacement_cost(
+        AggregateProducer const& producer,
+        AggregateProductionResult const& production
+    ) {
+        fixed_point_t total = fixed_point_t::_0;
+
+        for (auto const& [good, input_per_output] :
+                producer.get_production_type().input_goods) {
+            if (good == nullptr || input_per_output <= fixed_point_t::_0) {
+                continue;
+            }
+
+            GoodInstance& market =
+                good_instance_manager.get_good_instance_by_definition(*good);
+
+            fixed_point_t const consumed =
+                input_per_output * production.actual_output;
+
+            total += consumed * std::max(
+                market.get_price(),
+                fixed_point_t::_0
+            );
+        }
+
+        return total;
+    }
+
+    [[nodiscard]] ProductiveSiteOperatingEconomicsResult
+    calculate_site_operating_economics(
+        std::string_view employer_id,
+        AggregateProducer const& producer,
+        AggregateProductionResult const& production,
+        AggregateMarketCycleResult const& market,
+        std::optional<WorkforceAllocationResult> const& allocation,
+        fixed_point_t labor_offer_used
+    ) {
+        // B4B's labor_offer_used is an employer-priority/economic-capacity
+        // signal, not a wage. Do not feed it back as labor expense.
+        // A nonzero labor-cost component must come from an explicit wage/
+        // compensation mechanism in a later convergence increment.
+        (void)allocation;
+        (void)labor_offer_used;
+        fixed_point_t const labor_cost_proxy = fixed_point_t::_0;
+
+        return ProductiveSiteOperatingEconomics::calculate(
+            production.actual_output,
+            market.money_received,
+            market.money_spent,
+            calculate_material_replacement_cost(producer, production),
+            labor_cost_proxy,
+            electricity_cost_proxy_for(employer_id),
+            production.actual_output * corridor.calculate_unit_cost()
+        );
+    }
+
     void apply_upstream_site_utility_constraints() {
         std::vector<ProductiveSiteUtilityTarget> targets;
         targets.reserve(1 + additional_upstream_sites.size());
@@ -363,14 +450,17 @@ private:
             });
         }
 
+        latest_electricity_allocations.clear();
+
         if (electricity_grid_configured) {
-            (void)ProductiveSiteElectricityGridResolver::resolve_sources_stateful(
-                electricity_sources,
-                electricity_transmission_graph,
-                electricity_connections,
-                targets,
-                upstream_site_utility_requirements
-            );
+            latest_electricity_allocations =
+                ProductiveSiteElectricityGridResolver::resolve_sources_stateful(
+                    electricity_sources,
+                    electricity_transmission_graph,
+                    electricity_connections,
+                    targets,
+                    upstream_site_utility_requirements
+                );
         }
 
         ProductiveSiteUtilityResolver::apply(
@@ -534,26 +624,19 @@ return upstream;
 [[nodiscard]] fixed_point_t get_upstream_labor_offer(
 fixed_point_t no_history_offer = fixed_point_t::_1
 ) const {
-if (!completed_provenance.has_value()) {
-return no_history_offer;
-}
-
-LiveEconomyCycleProvenance const& previous = *completed_provenance;
-
 if (
-!previous.workforce.has_value() ||
-previous.workforce->allocated < fixed_point_t::_1
+!upstream_previous_allocation.has_value() ||
+!upstream_last_economics.has_value()
 ) {
 return no_history_offer;
 }
 
-fixed_point_t const operating_surplus = std::max(
-previous.upstream_market.money_received -
-previous.upstream_market.money_spent,
-fixed_point_t::_0
+return ProductiveSiteOperatingEconomics::
+labor_offer_from_prior_economics(
+*upstream_last_economics,
+upstream_previous_allocation->allocated,
+no_history_offer
 );
-
-return operating_surplus / previous.workforce->allocated;
 }
 
 [[nodiscard]] ProductiveSiteBinding const* get_upstream_site_binding() const {
@@ -648,6 +731,18 @@ preallocated_upstream_workforce = allocation;
                     : nullptr;
     }
 
+    [[nodiscard]] std::optional<ProductiveSiteOperatingEconomicsResult>
+    get_upstream_operating_economics() const {
+            return upstream_last_economics;
+    }
+
+    [[nodiscard]] std::optional<ProductiveSiteOperatingEconomicsResult>
+    get_additional_upstream_operating_economics(size_t index) const {
+            return index < additional_upstream_sites.size()
+                    ? additional_upstream_sites[index]->last_economics
+                    : std::nullopt;
+    }
+
     [[nodiscard]] std::optional<WorkforceAllocationResult>
     get_additional_upstream_previous_workforce(size_t index) const {
             return index < additional_upstream_sites.size()
@@ -673,11 +768,14 @@ preallocated_upstream_workforce = allocation;
                             upstream.set_capacity(resolved->installed_capacity);
                             upstream.set_available_workforce(fixed_point_t::_0);
 
+                            upstream_labor_offer_used =
+                                    get_upstream_labor_offer();
+
                             WorkforceEmployerRequest request =
                                     make_producer_workforce_request(
                                             upstream,
                                             upstream_employer_id,
-                                            get_upstream_labor_offer()
+                                            upstream_labor_offer_used
                                     );
 
                             upstream_requested_workforce = request.requested;
@@ -716,11 +814,13 @@ preallocated_upstream_workforce = allocation;
                             fixed_point_t::_0
                     );
 
+                    site->labor_offer_used = site->get_labor_offer();
+
                     WorkforceEmployerRequest request =
                             make_producer_workforce_request(
                                     site->producer,
                                     site->employer_id,
-                                    site->get_labor_offer()
+                                    site->labor_offer_used
                             );
 
                     site->requested_workforce = request.requested;
@@ -747,6 +847,8 @@ preallocated_upstream_workforce = allocation;
                                             upstream_requested_workforce,
                                     .allocated = fixed_point_t::_0
                             };
+                    upstream_current_allocation =
+                            preallocated_upstream_workforce;
             }
 
             for (auto& site : additional_upstream_sites) {
@@ -774,6 +876,8 @@ preallocated_upstream_workforce = allocation;
                                             .allocated =
                                                     allocation.allocated
                                     };
+                            upstream_current_allocation =
+                                    preallocated_upstream_workforce;
                             continue;
                     }
 
@@ -1454,11 +1558,13 @@ WorkforceAllocationResult allocation;
 (void)allocate_producer_workforce_from_pool(
 upstream, *upstream_pops, &allocation
 );
+upstream_current_allocation = allocation;
 if (pending_provenance) {
 pending_provenance->workforce = allocation;
 }
 preallocated_upstream_workforce.reset();
 } else if (preallocated_upstream_workforce.has_value()) {
+upstream_current_allocation = *preallocated_upstream_workforce;
 if (pending_provenance) {
 pending_provenance->workforce =
 *preallocated_upstream_workforce;
@@ -1473,8 +1579,9 @@ preallocated_upstream_workforce.reset();
 		status.source_buffer_draw = source_flow.buffer_draw;
 		status.source_unmet_inflow = source_flow.unmet;
 
-            const AggregateProductionResult upstream_result =
-                    upstream.produce();
+            upstream_last_production = upstream.produce();
+            const AggregateProductionResult& upstream_result =
+                    upstream_last_production;
 
             fixed_point_t total_upstream_output =
                     upstream_result.actual_output;
@@ -1558,11 +1665,43 @@ preallocated_upstream_workforce.reset();
 		upstream_bridge.clear_completed_orders();
             downstream_bridge.clear_completed_orders();
 
+            upstream_last_market =
+                    upstream_bridge.get_cycle_result();
+
+            std::string const primary_employer_id =
+                    upstream_employer_id.empty()
+                            ? std::string { "site:primary" }
+                            : upstream_employer_id;
+
+            upstream_last_economics =
+                    calculate_site_operating_economics(
+                            primary_employer_id,
+                            upstream,
+                            upstream_last_production,
+                            upstream_last_market,
+                            upstream_current_allocation,
+                            upstream_labor_offer_used
+                    );
+
+            upstream_previous_allocation =
+                    upstream_current_allocation;
+            upstream_current_allocation.reset();
+
             for (auto& site : additional_upstream_sites) {
                     site->bridge.clear_completed_orders();
 
                     site->last_market =
                             site->bridge.get_cycle_result();
+
+                    site->last_economics =
+                            calculate_site_operating_economics(
+                                    site->employer_id,
+                                    site->producer,
+                                    site->last_production,
+                                    site->last_market,
+                                    site->current_allocation,
+                                    site->labor_offer_used
+                            );
 
                     site->previous_allocation =
                             site->current_allocation;
@@ -1584,6 +1723,7 @@ preallocated_upstream_workforce.reset();
 		if (pending_provenance) {
 			pending_provenance->cycle = status.completed_daily_ticks;
 			pending_provenance->upstream_market = upstream_bridge.get_cycle_result();
+			pending_provenance->upstream_economics = upstream_last_economics;
 			pending_provenance->downstream_market = downstream_bridge.get_cycle_result();
 			pending_provenance->market_price = status.intermediate_price;
 			pending_provenance->downstream = downstream_result;
