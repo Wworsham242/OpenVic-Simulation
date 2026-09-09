@@ -3354,3 +3354,270 @@ TEST_CASE(
 	CHECK(limited->upstream.external_limited);
 	CHECK(limited->upstream.actual_output == fixed_point_t { 2 });
 }
+
+TEST_CASE(
+	"Generator resource availability and forced outage constrain dispatch",
+	"[economy][utilities][electricity-grid][generator-type][intermittency][outage][b14]"
+) {
+	LiveEconomyFixture fixture;
+
+	AggregateProducer plant {
+		"variable-power-plant",
+		*fixture.upstream_process,
+		fixed_point_t { 4 },
+		fixed_point_t::_1
+	};
+
+	std::vector<ProductiveSiteUtilityTarget> targets {
+		{
+			.employer_id = "variable-power-plant",
+			.producer = &plant
+		}
+	};
+
+	std::vector<ProductiveSiteUtilityRequirement> requirements {
+		{
+			.employer_id = "variable-power-plant",
+			.kind = ProductiveSiteUtilityKind::Electricity,
+			.required_per_output = fixed_point_t::_1,
+			.available_per_tick = fixed_point_t::_0
+		}
+	};
+
+	LogisticsGraph transmission;
+	REQUIRE(
+		transmission.configure(
+			{
+				LogisticsGraphEdge {
+					.edge_id = "wind-line",
+					.source = market_node_index_t { 0 },
+					.destination = market_node_index_t { 10 },
+					.leg = TransportLeg {
+						.nominal_capacity = fixed_point_t { 4 }
+					}
+				}
+			}
+		)
+	);
+
+	std::vector<ProductiveSiteElectricitySource> sources {
+		ProductiveSiteElectricitySource {
+			.source_id = "wind_farm",
+			.source_node = market_node_index_t { 0 },
+			.generator_kind = ElectricityGeneratorKind::Wind,
+			.available_generation_per_tick = fixed_point_t { 4 },
+			.ramp_up_per_tick = fixed_point_t { 4 },
+			.ramp_down_per_tick = fixed_point_t { 4 },
+			.resource_availability_fraction =
+				fixed_point_t::_1 / fixed_point_t { 2 }
+		}
+	};
+
+	auto allocations =
+		ProductiveSiteElectricityGridResolver::resolve_sources_stateful(
+			sources,
+			transmission,
+			{
+				ProductiveSiteElectricityConnection {
+					.employer_id = "variable-power-plant",
+					.destination_node = market_node_index_t { 10 }
+				}
+			},
+			targets,
+			requirements
+		);
+
+	REQUIRE(allocations.size() == 1);
+	CHECK(allocations[0].delivered == fixed_point_t { 2 });
+
+	sources[0].forced_outage = true;
+
+	allocations =
+		ProductiveSiteElectricityGridResolver::resolve_sources_stateful(
+			sources,
+			transmission,
+			{
+				ProductiveSiteElectricityConnection {
+					.employer_id = "variable-power-plant",
+					.destination_node = market_node_index_t { 10 }
+				}
+			},
+			targets,
+			requirements
+		);
+
+	CHECK(allocations[0].delivered == fixed_point_t::_0);
+}
+
+TEST_CASE(
+	"Generator heat rate multiplier changes physical fuel requirement",
+	"[economy][utilities][electricity-grid][generator-type][heat-rate][fuel][b14]"
+) {
+	LiveEconomyFixture fixture;
+
+	AggregateProducer plant {
+		"thermal-power-plant",
+		*fixture.upstream_process,
+		fixed_point_t { 4 },
+		fixed_point_t::_1
+	};
+
+	std::vector<ProductiveSiteUtilityTarget> targets {
+		{
+			.employer_id = "thermal-power-plant",
+			.producer = &plant
+		}
+	};
+
+	std::vector<ProductiveSiteUtilityRequirement> requirements {
+		{
+			.employer_id = "thermal-power-plant",
+			.kind = ProductiveSiteUtilityKind::Electricity,
+			.required_per_output = fixed_point_t::_1,
+			.available_per_tick = fixed_point_t::_0
+		}
+	};
+
+	LogisticsGraph transmission;
+	REQUIRE(
+		transmission.configure(
+			{
+				LogisticsGraphEdge {
+					.edge_id = "thermal-line",
+					.source = market_node_index_t { 0 },
+					.destination = market_node_index_t { 10 },
+					.leg = TransportLeg {
+						.nominal_capacity = fixed_point_t { 4 }
+					}
+				}
+			}
+		)
+	);
+
+	std::vector<ProductiveSiteElectricitySource> sources {
+		ProductiveSiteElectricitySource {
+			.source_id = "gas_turbine",
+			.source_node = market_node_index_t { 0 },
+			.generator_kind = ElectricityGeneratorKind::Thermal,
+			.available_generation_per_tick = fixed_point_t { 4 },
+			.ramp_up_per_tick = fixed_point_t { 4 },
+			.ramp_down_per_tick = fixed_point_t { 4 },
+			.fuel_good = fixture.feedstock,
+			.fuel_per_output = fixed_point_t::_1,
+			.fuel_inventory = fixed_point_t { 4 },
+			.heat_rate_multiplier = fixed_point_t { 2 }
+		}
+	};
+
+	auto allocations =
+		ProductiveSiteElectricityGridResolver::resolve_sources_stateful(
+			sources,
+			transmission,
+			{
+				ProductiveSiteElectricityConnection {
+					.employer_id = "thermal-power-plant",
+					.destination_node = market_node_index_t { 10 }
+				}
+			},
+			targets,
+			requirements
+		);
+
+	REQUIRE(allocations.size() == 1);
+	CHECK(allocations[0].delivered == fixed_point_t { 2 });
+	CHECK(sources[0].fuel_inventory == fixed_point_t::_0);
+}
+
+TEST_CASE(
+	"Runtime variable generation and forced outage propagate into industry",
+	"[economy][utilities][electricity-grid][generator-type][runtime][b14]"
+) {
+	LiveEconomyFixture fixture;
+	GoodInstanceManager goods { fixture.definitions, fixture.rules };
+	auto scenario = fixture.make_scenario();
+	LiveEconomyRuntime runtime { fixture.rules, goods, scenario };
+
+	REQUIRE(
+		runtime.configure_upstream_site_utility_requirements(
+			{
+				ProductiveSiteUtilityRequirement {
+					.employer_id = "site:primary",
+					.kind = ProductiveSiteUtilityKind::Electricity,
+					.required_per_output = fixed_point_t::_1,
+					.available_per_tick = fixed_point_t::_0
+				}
+			}
+		)
+	);
+
+	REQUIRE(
+		runtime.configure_upstream_electricity_sources(
+			{
+				ProductiveSiteElectricitySource {
+					.source_id = "wind_source",
+					.source_node = market_node_index_t { 0 },
+					.generator_kind = ElectricityGeneratorKind::Wind,
+					.available_generation_per_tick = fixed_point_t { 4 },
+					.ramp_up_per_tick = fixed_point_t { 4 },
+					.ramp_down_per_tick = fixed_point_t { 4 }
+				}
+			},
+			{
+				LogisticsGraphEdge {
+					.edge_id = "wind-runtime-line",
+					.source = market_node_index_t { 0 },
+					.destination = market_node_index_t { 10 },
+					.leg = TransportLeg {
+						.nominal_capacity = fixed_point_t { 4 }
+					}
+				}
+			},
+			{
+				ProductiveSiteElectricityConnection {
+					.employer_id = "site:primary",
+					.destination_node = market_node_index_t { 10 }
+				}
+			}
+		)
+	);
+
+	GoodInstance& intermediate_market =
+		goods.get_good_instance_by_definition(*fixture.intermediate);
+
+	auto cycle = [&]() {
+		runtime.pre_market_daily_tick();
+		execute_intermediate_market(intermediate_market);
+		runtime.post_market_daily_tick();
+	};
+
+	cycle();
+	auto full = runtime.get_latest_provenance();
+	REQUIRE(full.has_value());
+	CHECK(full->upstream.actual_output == fixed_point_t { 4 });
+
+	REQUIRE(
+		runtime.set_upstream_electricity_source_resource_availability(
+			"wind_source",
+			fixed_point_t::_1 / fixed_point_t { 2 }
+		)
+	);
+
+	cycle();
+	auto variable = runtime.get_latest_provenance();
+	REQUIRE(variable.has_value());
+	CHECK(variable->upstream.external_limited);
+	CHECK(variable->upstream.actual_output == fixed_point_t { 2 });
+
+	REQUIRE(
+		runtime.set_upstream_electricity_source_forced_outage(
+			"wind_source",
+			true
+		)
+	);
+
+	cycle();
+	auto outage = runtime.get_latest_provenance();
+	REQUIRE(outage.has_value());
+	CHECK(outage->upstream.external_limited);
+	CHECK(outage->upstream.actual_output == fixed_point_t::_0);
+}

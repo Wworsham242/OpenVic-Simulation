@@ -441,7 +441,7 @@ private:
                     fixed_point_t::_0,
                     fixed_point_t::_1
                 ) *
-                source.fuel_per_output;
+                calculate_generator_effective_fuel_per_output(source);
 
             inventory_targets.push_back(MaterialInventoryTarget {
                 .consumer_id = std::string { "generator:" } + source.source_id,
@@ -1092,6 +1092,9 @@ preallocated_upstream_workforce = allocation;
 				source.current_dispatch_per_tick < fixed_point_t::_0 ||
 				source.fuel_per_output < fixed_point_t::_0 ||
 				source.fuel_inventory < fixed_point_t::_0 ||
+				source.resource_availability_fraction < fixed_point_t::_0 ||
+				source.resource_availability_fraction > fixed_point_t::_1 ||
+				source.heat_rate_multiplier <= fixed_point_t::_0 ||
 				(source.fuel_good == nullptr &&
 					source.fuel_per_output > fixed_point_t::_0)
 			) {
@@ -1190,6 +1193,68 @@ preallocated_upstream_workforce = allocation;
 				source.fuel_good = fuel_good;
 				source.fuel_per_output = fuel_per_output;
 				source.fuel_inventory = initial_inventory;
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	[[nodiscard]] bool set_upstream_electricity_source_resource_availability(
+		std::string_view source_id,
+		fixed_point_t resource_availability_fraction
+	) {
+		if (
+			!electricity_grid_configured ||
+			resource_availability_fraction < fixed_point_t::_0 ||
+			resource_availability_fraction > fixed_point_t::_1
+		) {
+			return false;
+		}
+
+		for (ProductiveSiteElectricitySource& source : electricity_sources) {
+			if (source.source_id == source_id) {
+				source.resource_availability_fraction =
+					resource_availability_fraction;
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	[[nodiscard]] bool set_upstream_electricity_source_forced_outage(
+		std::string_view source_id,
+		bool forced_outage
+	) {
+		if (!electricity_grid_configured) {
+			return false;
+		}
+
+		for (ProductiveSiteElectricitySource& source : electricity_sources) {
+			if (source.source_id == source_id) {
+				source.forced_outage = forced_outage;
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	[[nodiscard]] bool set_upstream_electricity_source_heat_rate_multiplier(
+		std::string_view source_id,
+		fixed_point_t heat_rate_multiplier
+	) {
+		if (
+			!electricity_grid_configured ||
+			heat_rate_multiplier <= fixed_point_t::_0
+		) {
+			return false;
+		}
+
+		for (ProductiveSiteElectricitySource& source : electricity_sources) {
+			if (source.source_id == source_id) {
+				source.heat_rate_multiplier = heat_rate_multiplier;
 				return true;
 			}
 		}

@@ -20,9 +20,20 @@ struct ProductiveSiteElectricityGridState final {
 	fixed_point_t available_generation_per_tick = fixed_point_t::_0;
 };
 
+enum class ElectricityGeneratorKind : uint8_t {
+	Generic,
+	Thermal,
+	Nuclear,
+	Hydro,
+	Wind,
+	Solar
+};
+
 struct ProductiveSiteElectricitySource final {
 	std::string source_id;
 	market_node_index_t source_node {};
+	ElectricityGeneratorKind generator_kind =
+		ElectricityGeneratorKind::Generic;
 
 	// Nominal/nameplate generation supplied by scenario/runtime state.
 	fixed_point_t available_generation_per_tick = fixed_point_t::_0;
@@ -43,6 +54,14 @@ struct ProductiveSiteElectricitySource final {
 	GoodDefinition const* fuel_good = nullptr;
 	fixed_point_t fuel_per_output = fixed_point_t::_0;
 	fixed_point_t fuel_inventory = fixed_point_t::_0;
+
+	// B14 operational state. resource_availability_fraction represents
+	// exogenous primary-energy/resource conditions such as wind, sun or water.
+	// forced_outage is a hard plant outage. heat_rate_multiplier scales the
+	// physical fuel required per unit of electrical output; >1 is less efficient.
+	fixed_point_t resource_availability_fraction = fixed_point_t::_1;
+	bool forced_outage = false;
+	fixed_point_t heat_rate_multiplier = fixed_point_t::_1;
 };
 
 struct ProductiveSiteElectricityAllocation final {
@@ -51,6 +70,24 @@ struct ProductiveSiteElectricityAllocation final {
 	fixed_point_t transmission_allocated = fixed_point_t::_0;
 	fixed_point_t delivered = fixed_point_t::_0;
 };
+
+[[nodiscard]] inline fixed_point_t
+calculate_generator_effective_fuel_per_output(
+	ProductiveSiteElectricitySource const& source
+) {
+	if (
+		source.fuel_good == nullptr ||
+		source.fuel_per_output <= fixed_point_t::_0
+	) {
+		return fixed_point_t::_0;
+	}
+
+	return source.fuel_per_output *
+		std::max(
+			source.heat_rate_multiplier,
+			fixed_point_t::_0
+		);
+}
 
 /// Deterministic coarse electricity allocation for productive sites.
 ///
@@ -600,20 +637,31 @@ public:
 				fixed_point_t::_1
 			);
 
+			fixed_point_t const resource_availability = std::clamp(
+				source.resource_availability_fraction,
+				fixed_point_t::_0,
+				fixed_point_t::_1
+			);
+
+			fixed_point_t const operational_fraction =
+				source.forced_outage
+					? fixed_point_t::_0
+					: availability * resource_availability;
+
 			fixed_point_t const availability_limited =
-				nameplate * availability;
+				nameplate * operational_fraction;
 
 			fixed_point_t fuel_limited =
 				fixed_point_t::usable_max;
 
-			if (
-				source.fuel_good != nullptr &&
-				source.fuel_per_output > fixed_point_t::_0
-			) {
+			fixed_point_t const effective_fuel_per_output =
+				calculate_generator_effective_fuel_per_output(source);
+
+			if (effective_fuel_per_output > fixed_point_t::_0) {
 				fuel_limited = std::max(
 					source.fuel_inventory,
 					fixed_point_t::_0
-				) / source.fuel_per_output;
+				) / effective_fuel_per_output;
 			}
 
 			fixed_point_t const ramp_up_limited = std::min(
@@ -768,13 +816,13 @@ public:
 					source.source_id
 				);
 
-			if (
-				source.fuel_good != nullptr &&
-				source.fuel_per_output > fixed_point_t::_0
-			) {
+			fixed_point_t const effective_fuel_per_output =
+				calculate_generator_effective_fuel_per_output(source);
+
+			if (effective_fuel_per_output > fixed_point_t::_0) {
 				fixed_point_t const consumed =
 					source.current_dispatch_per_tick *
-					source.fuel_per_output;
+					effective_fuel_per_output;
 
 				source.fuel_inventory = std::max(
 					source.fuel_inventory - consumed,
