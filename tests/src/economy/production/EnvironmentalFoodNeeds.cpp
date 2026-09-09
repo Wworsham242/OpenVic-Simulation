@@ -560,3 +560,150 @@ TEST_CASE(
 
     CHECK(first_result == second_result);
 }
+
+TEST_CASE(
+    "004A3 one food-shortage day does not create instantaneous population stress",
+    "[convergence][004a3][environment][population][stress]"
+) {
+    FoodNeedsFixture fixture { fixed_point_t::_0_50 };
+
+    auto first_day = fixture.run_cycle();
+
+    REQUIRE(first_day.life_needs_fulfilled < fixed_point_t::_1);
+
+    // The completed shortage is consumed on the following POP tick.
+    CHECK(
+        fixture.consumer().get_survival_needs_stress_exposure()
+        == fixed_point_t::_0
+    );
+
+    CHECK(
+        fixture.consumer()
+            .get_last_survival_needs_stress_update()
+            .daily_deficit
+        == fixed_point_t::_0
+    );
+}
+
+TEST_CASE(
+    "004A3 sustained food scarcity accumulates lagged survival-needs stress",
+    "[convergence][004a3][environment][population][stress]"
+) {
+    FoodNeedsFixture fixture { fixed_point_t::_0_50 };
+
+    auto first_day = fixture.run_cycle();
+
+    REQUIRE(first_day.life_needs_fulfilled < fixed_point_t::_1);
+
+    fixture.run_cycle();
+
+    const auto second_update =
+        fixture.consumer().get_last_survival_needs_stress_update();
+
+    CHECK(second_update.daily_deficit > fixed_point_t::_0);
+    CHECK(second_update.daily_deficit < fixed_point_t::_1);
+    CHECK(second_update.exposure > fixed_point_t::_0);
+    CHECK(second_update.exposure < second_update.daily_deficit);
+
+    const fixed_point_t second_exposure =
+        fixture.consumer().get_survival_needs_stress_exposure();
+
+    auto third_day = fixture.run_cycle();
+
+    CHECK(third_day.life_needs_fulfilled < fixed_point_t::_1);
+
+    CHECK(
+        fixture.consumer().get_survival_needs_stress_exposure()
+        > second_exposure
+    );
+
+    CHECK(
+        fixture.consumer().get_survival_needs_stress_exposure()
+        <= fixed_point_t::_1
+    );
+}
+
+TEST_CASE(
+    "004A3 recovered food consumption decays accumulated survival-needs stress",
+    "[convergence][004a3][environment][population][stress]"
+) {
+    FoodNeedsFixture fixture { fixed_point_t::_0_50 };
+
+    fixture.run_cycle();
+    fixture.run_cycle();
+
+    const fixed_point_t stressed_exposure =
+        fixture.consumer().get_survival_needs_stress_exposure();
+
+    REQUIRE(stressed_exposure > fixed_point_t::_0);
+
+    fixture.province->set_environmental_state(
+        ProvinceEnvironmentalState {}
+    );
+
+    // This POP tick still consumes the completed preceding dry day.
+    auto first_recovery_day = fixture.run_cycle();
+
+    REQUIRE(
+        first_recovery_day.life_needs_fulfilled
+        == fixed_point_t::_1
+    );
+
+    const fixed_point_t lagged_exposure =
+        fixture.consumer().get_survival_needs_stress_exposure();
+
+    CHECK(lagged_exposure >= stressed_exposure);
+
+    // The next tick now consumes the fully-fed recovery day.
+    fixture.run_cycle();
+
+    const fixed_point_t recovering_exposure =
+        fixture.consumer().get_survival_needs_stress_exposure();
+
+    CHECK(recovering_exposure < lagged_exposure);
+    CHECK(recovering_exposure > fixed_point_t::_0);
+}
+
+TEST_CASE(
+    "004A3 survival-needs stress calculation is bounded and deterministic",
+    "[convergence][004a3][population][stress][determinism]"
+) {
+    const auto overfulfilled =
+        update_survival_needs_stress(
+            fixed_point_t::_0,
+            fixed_point_t { 2 }
+        );
+
+    CHECK(overfulfilled.daily_deficit == fixed_point_t::_0);
+    CHECK(overfulfilled.exposure == fixed_point_t::_0);
+
+    const auto impossible_negative =
+        update_survival_needs_stress(
+            fixed_point_t::_0,
+            fixed_point_t { -1 }
+        );
+
+    CHECK(impossible_negative.daily_deficit == fixed_point_t::_1);
+    CHECK(impossible_negative.exposure > fixed_point_t::_0);
+    CHECK(impossible_negative.exposure <= fixed_point_t::_1);
+
+    FoodNeedsFixture first { fixed_point_t::_0_50 };
+    FoodNeedsFixture second { fixed_point_t::_0_50 };
+
+    for (int day = 0; day < 10; ++day) {
+        first.run_cycle();
+        second.run_cycle();
+
+        CHECK(
+            first.consumer().get_survival_needs_stress_exposure()
+            ==
+            second.consumer().get_survival_needs_stress_exposure()
+        );
+
+        CHECK(
+            first.consumer().get_last_survival_needs_stress_update()
+            ==
+            second.consumer().get_last_survival_needs_stress_update()
+        );
+    }
+}

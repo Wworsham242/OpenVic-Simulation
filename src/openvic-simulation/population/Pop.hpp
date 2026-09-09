@@ -11,6 +11,7 @@
 #include "openvic-simulation/population/PopIdInProvince.hpp"
 #include "openvic-simulation/population/PopNeedsMacro.hpp"
 #include "openvic-simulation/population/PopSize.hpp"
+#include "openvic-simulation/population/SurvivalNeedsStress.hpp"
 #include "openvic-simulation/types/fixed_point/Atomic.hpp"
 #include "openvic-simulation/types/fixed_point/FixedPoint.hpp"
 #include "openvic-simulation/types/fixed_point/FixedPointMap.hpp"
@@ -143,6 +144,26 @@ namespace OpenVic {
 		moveable_atomic_fixed_point_t PROPERTY(cash);
 		moveable_atomic_fixed_point_t PROPERTY(expenses); //positive value means POP paid for goods. This is displayed * -1 in UI.
 		moveable_atomic_fixed_point_t PROPERTY(yesterdays_import_value);
+
+		/*
+		 * Lagged survival-consumption stress derived from the previous
+		 * day's native life-needs fulfillment.
+		 *
+		 * This is authoritative POP state, not a second needs ledger.
+		 */
+		fixed_point_t survival_needs_stress_exposure = fixed_point_t::_0;
+		SurvivalNeedsStressUpdate last_survival_needs_stress_update {};
+
+	public:
+		[[nodiscard]] fixed_point_t get_survival_needs_stress_exposure() const {
+			return survival_needs_stress_exposure;
+		}
+
+		[[nodiscard]] SurvivalNeedsStressUpdate const& get_last_survival_needs_stress_update() const {
+			return last_survival_needs_stress_update;
+		}
+
+	private:
 
 		#define NEED_MEMBERS(need_category) \
 			moveable_atomic_fixed_point_t need_category##_needs_acquired_quantity, need_category##_needs_desired_quantity; \

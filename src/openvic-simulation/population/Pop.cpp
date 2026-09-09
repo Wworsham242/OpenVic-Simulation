@@ -521,6 +521,24 @@ void Pop::pop_tick_without_cleanup(
 	memory::vector<fixed_point_t>& money_to_spend_per_good = reusable_vectors[3];
 	money_to_spend_per_good.resize(good_count, 0);
 	cash_allocated_for_artisanal_spending = 0;
+
+	/*
+	 * Market clearing updates needs acquisition after the previous POP
+	 * tick. Consume that completed result here, before this day's needs
+	 * state is rebuilt.
+	 *
+	 * This deliberately creates a one-cycle causal lag:
+	 *
+	 * yesterday's consumption shortfall
+	 *     -> today's accumulated survival-needs stress.
+	 */
+	last_survival_needs_stress_update = update_survival_needs_stress(
+		survival_needs_stress_exposure,
+		get_life_needs_fulfilled()
+	);
+	survival_needs_stress_exposure =
+		last_survival_needs_stress_update.exposure;
+
 	fill_needs_fulfilled_goods_with_false();
 	
 	fixed_point_map_t<good_index_t> goods_to_sell {};
