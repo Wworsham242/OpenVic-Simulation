@@ -162,15 +162,19 @@ void GoodMarket::execute_orders(
 				continue;
 			}
 
-			fixed_point_t purchasing_power = purchasing_power_per_order[i] = money_to_spend / max_next_price;
-			if (purchasing_power >= max_quantity) {
-				max_quantity_to_buy_sum += max_quantity;
+			const fixed_point_t raw_purchasing_power =
+				money_to_spend / max_next_price;
+			const fixed_point_t purchasing_power =
+				std::min(raw_purchasing_power, max_quantity);
+			purchasing_power_per_order[i] = purchasing_power;
+
+			max_quantity_to_buy_sum += purchasing_power;
+			purchasing_power_sum += purchasing_power;
+
+			if (raw_purchasing_power >= max_quantity) {
 				money_left_to_spend_sum += max_quantity * max_next_price;
-				purchasing_power_sum += max_quantity;
 			} else {
-				max_quantity_to_buy_sum += purchasing_power;
 				money_left_to_spend_sum += money_to_spend;
-				purchasing_power_sum += purchasing_power;
 			}
 		}
 
@@ -223,7 +227,11 @@ void GoodMarket::execute_orders(
 						break;
 					}
 				}
-			} while (someone_bought_max_quantity);
+			} while (
+				someone_bought_max_quantity &&
+				remaining_supply > 0 &&
+				purchasing_power_sum > 0
+			);
 
 			execute_buy_orders(
 				new_price,

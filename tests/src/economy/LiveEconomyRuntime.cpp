@@ -23,6 +23,7 @@
 #include "openvic-simulation/population/Culture.hpp"
 #include "openvic-simulation/population/Pop.hpp"
 #include "openvic-simulation/population/PopDeps.hpp"
+#include "openvic-simulation/population/PopManager.hpp"
 #include "openvic-simulation/population/PopType.hpp"
 #include "openvic-simulation/population/PopsAggregateDeps.hpp"
 #include "openvic-simulation/population/Religion.hpp"
@@ -267,6 +268,7 @@ namespace {
 		ThreadPool threads { date };
 		DefineManager defines;
 		ModifierManager modifier_manager;
+		ProductionTypeManager production_types;
 		BuildingTypeManager buildings;
 		PopsAggregateDeps aggregates { {}, {}, pop_type_index_t { 2 }, {}, strata_index_t { 1 } };
 		MarketInstance market;
@@ -287,6 +289,7 @@ namespace {
 		Religion religion { "test", colour_t { 0x12, 0x34, 0x56 }, religion_group, 1, false };
 		PopType eligible = make_type("eligible", pop_type_index_t { 0 });
 		PopType ineligible = make_type("ineligible", pop_type_index_t { 1 });
+		std::optional<PopType> consumer_eligible;
 
 		PopType make_type(std::string_view name, pop_type_index_t index) {
 			return PopType {
@@ -303,9 +306,71 @@ namespace {
 			};
 		}
 
-		WorkforcePopFixture(GameRulesManager const& rules, GoodInstanceManager& goods)
+		WorkforcePopFixture(
+			GameRulesManager const& rules,
+			GoodInstanceManager& goods,
+			GoodDefinition const* consumer_need_good = nullptr
+		)
 			: market { threads, defines.get_country_defines(), goods },
-			province { definition, ProvinceInstanceDeps { buildings, rules, aggregates, rgo_deps, {} } } {}
+			province { definition, ProvinceInstanceDeps { buildings, rules, aggregates, rgo_deps, {} } } {
+			if (consumer_need_good != nullptr) {
+				// The lightweight employment fixture normally leaves the POP
+				// economic defines/modifier cache empty because labor allocation
+				// does not consult them. B18 exercises the real Pop::pop_tick
+				// purchasing path, so initialize these native prerequisites only
+				// for the explicit consumer fixture.
+				defines.configure_pops_economic_test_values(
+					fixed_point_t::_1,
+					fixed_point_t::_1
+				);
+
+				REQUIRE(modifier_manager.setup_modifier_effects());
+
+				PopManager modifier_pop_manager;
+				REQUIRE(modifier_pop_manager.setup_stratas());
+				REQUIRE(
+					modifier_pop_manager.generate_modifiers(
+						modifier_manager
+					)
+				);
+				fixed_point_map_t<good_index_t> life_needs;
+				life_needs.emplace(
+					consumer_need_good->index,
+					fixed_point_t { 20000 }
+				);
+
+				PopType consumer_type {
+					"consumer_eligible",
+					colour_t { 0x12, 0x34, 0x56 },
+					pop_type_index_t { 0 },
+					strata,
+					pop_sprite_t {},
+					std::move(life_needs),
+					fixed_point_map_t<good_index_t> {},
+					fixed_point_map_t<good_index_t> {},
+					PopType::income_type_t::NO_INCOME_TYPE,
+					PopType::income_type_t::NO_INCOME_TYPE,
+					PopType::income_type_t::NO_INCOME_TYPE,
+					PopType::rebel_units_t {},
+					pop_size_t { 1000 },
+					pop_size_t { 1000 },
+					false, false, false, false, false, false,
+					false, false, false, false, false, true,
+					fixed_point_t::_0,
+					fixed_point_t::_0,
+					fixed_point_t::_0,
+					fixed_point_t::_0,
+					nullptr,
+					ConditionalWeightFactorMul {},
+					ConditionalWeightFactorMul {},
+					PopType::poptype_weight_map_t { create_empty },
+					PopType::ideology_weight_map_t { create_empty },
+					PopType::issue_weight_map_t {}
+				};
+
+				consumer_eligible.emplace(std::move(consumer_type));
+			}
+		}
 
 		Pop make_pop(PopType const& type, int size, size_t id, ProvinceInstance* location = nullptr) {
 			struct InitialPop : PopBase {
@@ -904,7 +969,11 @@ namespace {
 	struct BoundWorldFixture {
 		LiveEconomyFixture economy { workforce_jobs(), pop_size_t { 10 }, ProductionType::template_type_t::PROCESS };
 		GoodInstanceManager goods { economy.definitions, economy.rules };
-		WorkforcePopFixture population { economy.rules, goods };
+		WorkforcePopFixture population {
+			economy.rules,
+			goods,
+			economy.intermediate
+		};
 		MapDefinition definition;
 		std::unique_ptr<MapInstance> map;
 		LiveEconomyScenarioDefinition scenario = economy.make_scenario();
@@ -982,46 +1051,102 @@ namespace {
 			location.get_mutable_pops().clear();
 			location.get_mutable_pops().emplace(population.make_pop(population.eligible, size, 1, &location));
 		}
+
+		void replace_population_with_consumer(std::string_view id, int size) {
+			REQUIRE(population.consumer_eligible.has_value());
+			auto& location = province(id);
+			location.get_mutable_pops().clear();
+			location.get_mutable_pops().emplace(
+				population.make_pop(
+					*population.consumer_eligible,
+					size,
+					1,
+					&location
+				)
+			);
+		}
+
+		void native_pop_tick() {
+			PopValuesFromProvince pop_values {
+				economy.rules,
+				goods,
+				population.modifier_manager.get_modifier_effect_cache(),
+				population.production_types,
+				population.defines.get_pops_defines(),
+				strata_index_t { 1 }
+			};
+
+			memory::FixedVector<char, good_index_t> goods_mask {
+				good_index_t {
+					static_cast<uint32_t>(
+						goods.get_good_instances().size()
+					)
+				},
+				{}
+			};
+
+			std::array<
+				memory::vector<fixed_point_t>,
+				ProvinceInstance::VECTORS_FOR_PROVINCE_TICK
+			> vectors;
+
+			RandomU32 rng;
+
+			for (ProvinceInstance& location :
+					map->get_province_instances()) {
+				location.province_tick(
+					population.date,
+					pop_values,
+					rng,
+					goods_mask,
+					vectors
+				);
+
+				for (auto& vector : vectors) {
+					vector.clear();
+				}
+			}
+		}
 		void cycle() {
-                 auto previous = timeline.current_time();
-                 REQUIRE(timeline.advance(24));
+			auto previous = timeline.current_time();
+			REQUIRE(timeline.advance(24));
 
-                 // Match InstanceManager: one prepared POP pool, one province-wide
-                 // allocation authority containing RGO + every bound productive site.
-                 map->prepare_employment_phase();
+			// Match InstanceManager: one prepared POP pool, one province-wide
+			// allocation authority containing RGO + every bound productive site.
+			map->prepare_employment_phase();
 
-                 auto employer_requests =
-                         runtime.prepare_upstream_employer_requests(*map);
+			auto employer_requests =
+				runtime.prepare_upstream_employer_requests(*map);
 
-                 auto allocations =
-                         map->allocate_employment_phase(
-                                 std::move(employer_requests)
-                         );
+			auto allocations =
+				map->allocate_employment_phase(
+					std::move(employer_requests)
+				);
 
-                 runtime.apply_upstream_employer_allocations(
-                         allocations
-                 );
+			runtime.apply_upstream_employer_allocations(
+				allocations
+			);
 
-                 map->finish_rgo_production();
+			map->finish_rgo_production();
 
-                 runtime.run_due_daily_cycles(
-                         previous,
-                         timeline.current_time(),
-                         [&](SimTime) -> std::optional<WorkforcePool> {
-                                 // Workers have already been committed through Pop::hire().
-                                 // A second pool here would constitute a second hiring pass.
-                                 return std::nullopt;
-                         },
-                         [&]() {
-                                 ++clearings;
-                                 execute_intermediate_market(
-                                         goods.get_good_instance_by_definition(
-                                                 *economy.intermediate
-                                         )
-                                 );
-                         }
-                 );
-         }
+			runtime.run_due_daily_cycles(
+				previous,
+				timeline.current_time(),
+				[&](SimTime) -> std::optional<WorkforcePool> {
+					// Workers have already been committed through Pop::hire().
+					// A second pool here would constitute a second hiring pass.
+					return std::nullopt;
+				},
+				[&]() {
+					++clearings;
+					execute_intermediate_market(
+						goods.get_good_instance_by_definition(
+							*economy.intermediate
+						)
+					);
+				}
+			);
+		}
 	};
 }
 
@@ -4009,5 +4134,110 @@ TEST_CASE(
 	CHECK(
 		economics->labor_compensation_cost ==
 		fixed_point_t { 80 }
+	);
+}
+
+TEST_CASE(
+	"Productive-site wages feed native POP demand on the next cycle",
+	"[economy][household-demand][wages][market-feedback][b18]"
+) {
+	BoundWorldFixture no_wage;
+	BoundWorldFixture paid_wage;
+
+	no_wage.replace_population_with_consumer("1", 40);
+	paid_wage.replace_population_with_consumer("1", 40);
+
+	REQUIRE(
+		paid_wage.runtime.set_upstream_site_compensation_per_worker(
+			"site:1:plant",
+			fixed_point_t { 2 }
+		)
+	);
+
+	auto& no_wage_pop =
+		*no_wage.province("1").get_mutable_pops().begin();
+	auto& paid_pop =
+		*paid_wage.province("1").get_mutable_pops().begin();
+
+	// Cycle 1: run the same native ProvinceInstance/Pop tick that the
+	// initialized game thread pool normally runs before employment.
+	// The paid worker receives wages during the authoritative hiring pass,
+	// so those wages are deliberately available to the NEXT needs cycle.
+	no_wage.native_pop_tick();
+	paid_wage.native_pop_tick();
+	no_wage.cycle();
+	paid_wage.cycle();
+
+	CHECK(
+		paid_pop.get_cash().get_copy_of_value() >
+		no_wage_pop.get_cash().get_copy_of_value()
+	);
+
+	auto paid_first_economics =
+		paid_wage.runtime.get_upstream_operating_economics();
+	REQUIRE(paid_first_economics.has_value());
+	CHECK(
+		paid_first_economics->labor_compensation_cost ==
+		fixed_point_t { 80 }
+	);
+
+	// Cycle 2: native Pop::pop_tick consumes the prior wage-created cash
+	// budget and places actual GoodMarket buy orders for the worker's life
+	// need. No household-demand shadow ledger is involved.
+	no_wage.native_pop_tick();
+	paid_wage.native_pop_tick();
+	no_wage.cycle();
+	paid_wage.cycle();
+
+	GoodInstance& no_wage_market =
+		no_wage.goods.get_good_instance_by_definition(
+			*no_wage.economy.intermediate
+		);
+	GoodInstance& paid_market =
+		paid_wage.goods.get_good_instance_by_definition(
+			*paid_wage.economy.intermediate
+		);
+
+	// GoodMarket::total_demand_yesterday is nominal requested quantity,
+	// even for zero-budget orders. B18 therefore verifies effective demand
+	// through actual settlement outcomes instead of that diagnostic field.
+	CHECK(
+		paid_market.get_quantity_traded_yesterday() >=
+		no_wage_market.get_quantity_traded_yesterday()
+	);
+
+	auto no_wage_provenance =
+		no_wage.runtime.get_latest_provenance();
+	auto paid_provenance =
+		paid_wage.runtime.get_latest_provenance();
+
+	REQUIRE(no_wage_provenance.has_value());
+	REQUIRE(paid_provenance.has_value());
+
+	// The additional household bid must be visible to the same market that
+	// settles productive-site sales. Depending on finite supply, the effect
+	// can appear as more traded quantity and/or a higher clearing price.
+	CHECK(
+		paid_market.get_price() >=
+		no_wage_market.get_price()
+	);
+
+	CHECK(
+		paid_provenance->upstream_market.money_received >=
+		no_wage_provenance->upstream_market.money_received
+	);
+
+		// Finite intermediate supply is already fully absorbed by industrial demand,
+	// so wage-funded household demand may crowd out industrial purchases without
+	// raising total market volume, price, or seller revenue. Verify the causal
+	// household bridge at the native POP settlement boundary instead.
+	CHECK(
+	    paid_pop.get_life_needs_expense() >
+	        no_wage_pop.get_life_needs_expense()
+	);
+	CHECK(paid_pop.get_life_needs_expense() > 0);
+	CHECK(
+	    paid_pop.get_life_needs_fulfilled() >
+	        no_wage_pop.get_life_needs_fulfilled()
 	);
 }

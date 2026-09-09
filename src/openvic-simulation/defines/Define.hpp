@@ -34,5 +34,17 @@ namespace OpenVic {
 		}
 
 		bool load_defines_file(ast::NodeCPtr root);
+
+#ifdef OPENVIC_SIMULATION_TESTS
+		void configure_pops_economic_test_values(
+			fixed_point_t base_goods_demand,
+			fixed_point_t pdef_base_con
+		) {
+			pops_defines.base_goods_demand =
+				base_goods_demand;
+			pops_defines.pdef_base_con =
+				pdef_base_con;
+		}
+#endif
 	};
 }
