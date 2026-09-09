@@ -3877,3 +3877,137 @@ TEST_CASE(
 			fixed_point_t { 40 }
 	);
 }
+
+TEST_CASE(
+	"Wage formation combines scarcity profitability and local competition",
+	"[economy][wage-formation][b17]"
+) {
+	ProductiveSiteWageFormationPolicy policy {
+		.minimum_compensation = fixed_point_t { 1 },
+		.maximum_compensation = fixed_point_t { 10 },
+		.adjustment_rate =
+			fixed_point_t::_1 / fixed_point_t { 2 },
+		.scarcity_weight =
+			fixed_point_t::_1 / fixed_point_t { 2 },
+		.operating_surplus_share =
+			fixed_point_t::_1 / fixed_point_t { 4 },
+		.competition_weight =
+			fixed_point_t::_1 / fixed_point_t { 2 }
+	};
+
+	auto result = ProductiveSiteWageFormation::calculate(
+		ProductiveSiteWageFormationInput {
+			.prior_compensation = fixed_point_t { 2 },
+			.requested_workforce = fixed_point_t { 100 },
+			.allocated_workforce = fixed_point_t { 50 },
+			.operating_surplus = fixed_point_t { 100 },
+			.highest_competing_compensation = fixed_point_t { 4 }
+		},
+		policy
+	);
+
+	CHECK(
+		result.scarcity_ratio ==
+		fixed_point_t::_1 / fixed_point_t { 2 }
+	);
+	CHECK(
+		result.scarcity_pressure ==
+		fixed_point_t::_1 / fixed_point_t { 2 }
+	);
+	CHECK(result.operating_surplus_per_worker == fixed_point_t { 2 });
+	CHECK(
+		result.profitability_pressure ==
+		fixed_point_t::_1 / fixed_point_t { 2 }
+	);
+	CHECK(result.competition_pressure == fixed_point_t { 1 });
+	CHECK(result.unconstrained_target == fixed_point_t { 4 });
+	CHECK(result.constrained_target == fixed_point_t { 4 });
+	CHECK(result.next_compensation == fixed_point_t { 3 });
+}
+
+TEST_CASE(
+	"Wage formation can reduce loss-making compensation but respects floor",
+	"[economy][wage-formation][floor][b17]"
+) {
+	ProductiveSiteWageFormationPolicy policy {
+		.minimum_compensation = fixed_point_t { 2 },
+		.maximum_compensation = fixed_point_t { 10 },
+		.adjustment_rate = fixed_point_t::_1,
+		.scarcity_weight = fixed_point_t::_0,
+		.operating_surplus_share =
+			fixed_point_t::_1 / fixed_point_t { 2 },
+		.competition_weight = fixed_point_t::_0
+	};
+
+	auto result = ProductiveSiteWageFormation::calculate(
+		ProductiveSiteWageFormationInput {
+			.prior_compensation = fixed_point_t { 5 },
+			.requested_workforce = fixed_point_t { 10 },
+			.allocated_workforce = fixed_point_t { 10 },
+			.operating_surplus = -fixed_point_t { 100 },
+			.highest_competing_compensation = fixed_point_t::_0
+		},
+		policy
+	);
+
+	CHECK(result.unconstrained_target == fixed_point_t::_0);
+	CHECK(result.constrained_target == fixed_point_t { 2 });
+	CHECK(result.next_compensation == fixed_point_t { 2 });
+}
+
+TEST_CASE(
+	"Runtime wage formation updates next-cycle compensation after settlement",
+	"[economy][wage-formation][runtime][b17]"
+) {
+	BoundWorldFixture world;
+	world.replace_population("1", 40);
+
+	REQUIRE(
+		world.runtime.set_upstream_site_compensation_per_worker(
+			"site:1:plant",
+			fixed_point_t { 2 }
+		)
+	);
+
+	ProductiveSiteWageFormationPolicy policy {
+		.minimum_compensation = fixed_point_t { 3 },
+		.maximum_compensation = fixed_point_t { 10 },
+		.adjustment_rate = fixed_point_t::_1,
+		.scarcity_weight = fixed_point_t::_0,
+		.operating_surplus_share = fixed_point_t::_0,
+		.competition_weight = fixed_point_t::_0
+	};
+
+	REQUIRE(
+		world.runtime.configure_upstream_site_wage_formation(
+			"site:1:plant",
+			policy
+		)
+	);
+
+	world.cycle();
+
+	auto wage =
+		world.runtime.get_upstream_site_compensation_per_worker(
+			"site:1:plant"
+		);
+	REQUIRE(wage.has_value());
+	CHECK(*wage == fixed_point_t { 3 });
+
+	auto formation =
+		world.runtime.get_upstream_site_last_wage_formation(
+			"site:1:plant"
+		);
+	REQUIRE(formation.has_value());
+	CHECK(formation->constrained_target == fixed_point_t { 3 });
+	CHECK(formation->next_compensation == fixed_point_t { 3 });
+
+	// The first cycle still paid the prior wage of 2 to 40 workers.
+	auto economics =
+		world.runtime.get_upstream_operating_economics();
+	REQUIRE(economics.has_value());
+	CHECK(
+		economics->labor_compensation_cost ==
+		fixed_point_t { 80 }
+	);
+}

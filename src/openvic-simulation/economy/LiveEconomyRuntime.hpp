@@ -20,6 +20,7 @@
 #include "openvic-simulation/economy/production/ProductiveSiteUtilityResolver.hpp"
 #include "openvic-simulation/economy/production/ProductiveSiteElectricityGridResolver.hpp"
 #include "openvic-simulation/economy/production/ProductiveSiteOperatingEconomics.hpp"
+#include "openvic-simulation/economy/production/ProductiveSiteWageFormation.hpp"
 #include "openvic-simulation/economy/trading/LogisticsGraph.hpp"
 #include "openvic-simulation/economy/trading/MarketNodeAccess.hpp"
 #include "openvic-simulation/economy/trading/SharedTransportCapacity.hpp"
@@ -136,6 +137,9 @@ private:
         std::optional<ProductiveSiteOperatingEconomicsResult> last_economics;
         fixed_point_t labor_offer_used = fixed_point_t::_1;
         fixed_point_t compensation_per_worker = fixed_point_t::_0;
+        bool wage_formation_enabled = false;
+        ProductiveSiteWageFormationPolicy wage_policy {};
+        std::optional<ProductiveSiteWageFormationResult> last_wage_formation;
 
         static std::string make_employer_id(
             ProductiveSiteBinding const& binding
@@ -234,6 +238,10 @@ private:
         upstream_last_economics;
     fixed_point_t upstream_labor_offer_used = fixed_point_t::_1;
     fixed_point_t upstream_compensation_per_worker = fixed_point_t::_0;
+    bool upstream_wage_formation_enabled = false;
+    ProductiveSiteWageFormationPolicy upstream_wage_policy {};
+    std::optional<ProductiveSiteWageFormationResult>
+        upstream_last_wage_formation;
     std::vector<ProductiveSiteElectricityAllocation>
         latest_electricity_allocations;
 
@@ -436,6 +444,43 @@ private:
             labor_compensation_cost,
             electricity_cost_proxy_for(employer_id),
             production.actual_output * corridor.calculate_unit_cost()
+        );
+    }
+
+    [[nodiscard]] static fixed_point_t
+    active_compensation_or_zero(
+        fixed_point_t compensation,
+        std::optional<WorkforceAllocationResult> const& allocation
+    ) {
+        return
+            allocation.has_value() &&
+            allocation->allocated >= fixed_point_t::_1
+                ? std::max(compensation, fixed_point_t::_0)
+                : fixed_point_t::_0;
+    }
+
+    [[nodiscard]] static ProductiveSiteWageFormationResult
+    calculate_next_site_compensation(
+        fixed_point_t current_compensation,
+        fixed_point_t requested_workforce,
+        std::optional<WorkforceAllocationResult> const& allocation,
+        ProductiveSiteOperatingEconomicsResult const& economics,
+        fixed_point_t highest_competing_compensation,
+        ProductiveSiteWageFormationPolicy const& policy
+    ) {
+        return ProductiveSiteWageFormation::calculate(
+            ProductiveSiteWageFormationInput {
+                .prior_compensation = current_compensation,
+                .requested_workforce = requested_workforce,
+                .allocated_workforce =
+                    allocation.has_value()
+                        ? allocation->allocated
+                        : fixed_point_t::_0,
+                .operating_surplus = economics.operating_surplus,
+                .highest_competing_compensation =
+                    highest_competing_compensation
+            },
+            policy
         );
     }
 
@@ -954,6 +999,108 @@ preallocated_upstream_workforce = allocation;
 		}
 
 		return false;
+	}
+
+	[[nodiscard]] bool configure_upstream_site_wage_formation(
+		std::string_view employer_id,
+		ProductiveSiteWageFormationPolicy const& policy
+	) {
+		if (employer_id.empty() || !policy.is_valid()) {
+			return false;
+		}
+
+		std::string const primary_id =
+			upstream_employer_id.empty()
+				? std::string { "site:primary" }
+				: upstream_employer_id;
+
+		if (employer_id == primary_id) {
+			upstream_wage_policy = policy;
+			upstream_wage_formation_enabled = true;
+			return true;
+		}
+
+		for (auto& site : additional_upstream_sites) {
+			if (site->employer_id == employer_id) {
+				site->wage_policy = policy;
+				site->wage_formation_enabled = true;
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	[[nodiscard]] bool set_upstream_site_wage_formation_enabled(
+		std::string_view employer_id,
+		bool enabled
+	) {
+		if (employer_id.empty()) {
+			return false;
+		}
+
+		std::string const primary_id =
+			upstream_employer_id.empty()
+				? std::string { "site:primary" }
+				: upstream_employer_id;
+
+		if (employer_id == primary_id) {
+			upstream_wage_formation_enabled = enabled;
+			return true;
+		}
+
+		for (auto& site : additional_upstream_sites) {
+			if (site->employer_id == employer_id) {
+				site->wage_formation_enabled = enabled;
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	[[nodiscard]] std::optional<fixed_point_t>
+	get_upstream_site_compensation_per_worker(
+		std::string_view employer_id
+	) const {
+		std::string const primary_id =
+			upstream_employer_id.empty()
+				? std::string { "site:primary" }
+				: upstream_employer_id;
+
+		if (employer_id == primary_id) {
+			return upstream_compensation_per_worker;
+		}
+
+		for (auto const& site : additional_upstream_sites) {
+			if (site->employer_id == employer_id) {
+				return site->compensation_per_worker;
+			}
+		}
+
+		return std::nullopt;
+	}
+
+	[[nodiscard]] std::optional<ProductiveSiteWageFormationResult>
+	get_upstream_site_last_wage_formation(
+		std::string_view employer_id
+	) const {
+		std::string const primary_id =
+			upstream_employer_id.empty()
+				? std::string { "site:primary" }
+				: upstream_employer_id;
+
+		if (employer_id == primary_id) {
+			return upstream_last_wage_formation;
+		}
+
+		for (auto const& site : additional_upstream_sites) {
+			if (site->employer_id == employer_id) {
+				return site->last_wage_formation;
+			}
+		}
+
+		return std::nullopt;
 	}
 
 	[[nodiscard]] bool set_upstream_capacity_from_facility(
@@ -1726,9 +1873,91 @@ preallocated_upstream_workforce.reset();
                             upstream_compensation_per_worker
                     );
 
-            upstream_previous_allocation =
-                    upstream_current_allocation;
-            upstream_current_allocation.reset();
+            // Wage formation is intentionally one-cycle delayed:
+            // this cycle's compensation is paid during authoritative hiring,
+            // then realized labor scarcity/economics set next cycle's rate.
+            fixed_point_t const primary_prior_compensation =
+                    upstream_compensation_per_worker;
+
+            std::vector<fixed_point_t> additional_prior_compensation;
+            additional_prior_compensation.reserve(
+                    additional_upstream_sites.size()
+            );
+            for (auto const& site : additional_upstream_sites) {
+                    additional_prior_compensation.push_back(
+                            site->compensation_per_worker
+                    );
+            }
+
+            auto const highest_competing_compensation =
+                    [&](std::string_view employer_id) {
+                            fixed_point_t highest =
+                                    fixed_point_t::_0;
+
+                            std::string const primary_id =
+                                    upstream_employer_id.empty()
+                                            ? std::string { "site:primary" }
+                                            : upstream_employer_id;
+
+                            if (employer_id != primary_id) {
+                                    highest = std::max(
+                                            highest,
+                                            active_compensation_or_zero(
+                                                primary_prior_compensation,
+                                                upstream_current_allocation
+                                            )
+                                    );
+                            }
+
+                            for (size_t i = 0;
+                                 i < additional_upstream_sites.size();
+                                 ++i) {
+                                    auto const& candidate =
+                                            additional_upstream_sites[i];
+
+                                    if (candidate->employer_id == employer_id) {
+                                            continue;
+                                    }
+
+                                    highest = std::max(
+                                        highest,
+                                        active_compensation_or_zero(
+                                            additional_prior_compensation[i],
+                                            candidate->current_allocation
+                                        )
+                                    );
+                            }
+
+                            return highest;
+                    };
+
+            std::string const primary_id =
+                    upstream_employer_id.empty()
+                            ? std::string { "site:primary" }
+                            : upstream_employer_id;
+
+            upstream_last_wage_formation.reset();
+            if (
+                    upstream_wage_formation_enabled &&
+                    upstream_last_economics.has_value() &&
+                    upstream_current_allocation.has_value()
+            ) {
+                    upstream_last_wage_formation =
+                            calculate_next_site_compensation(
+                                    primary_prior_compensation,
+                                    upstream_requested_workforce,
+                                    upstream_current_allocation,
+                                    *upstream_last_economics,
+                                    highest_competing_compensation(
+                                        primary_id
+                                    ),
+                                    upstream_wage_policy
+                            );
+
+                    upstream_compensation_per_worker =
+                            upstream_last_wage_formation->
+                                next_compensation;
+            }
 
             for (auto& site : additional_upstream_sites) {
                     site->bridge.clear_completed_orders();
@@ -1746,10 +1975,44 @@ preallocated_upstream_workforce.reset();
                                     site->labor_offer_used,
                                     site->compensation_per_worker
                             );
+            }
 
+            for (size_t i = 0;
+                 i < additional_upstream_sites.size();
+                 ++i) {
+                    auto& site = additional_upstream_sites[i];
+                    site->last_wage_formation.reset();
+
+                    if (
+                            site->wage_formation_enabled &&
+                            site->last_economics.has_value() &&
+                            site->current_allocation.has_value()
+                    ) {
+                            site->last_wage_formation =
+                                    calculate_next_site_compensation(
+                                            additional_prior_compensation[i],
+                                            site->requested_workforce,
+                                            site->current_allocation,
+                                            *site->last_economics,
+                                            highest_competing_compensation(
+                                                site->employer_id
+                                            ),
+                                            site->wage_policy
+                                    );
+
+                            site->compensation_per_worker =
+                                    site->last_wage_formation->
+                                        next_compensation;
+                    }
+            }
+
+            upstream_previous_allocation =
+                    upstream_current_allocation;
+            upstream_current_allocation.reset();
+
+            for (auto& site : additional_upstream_sites) {
                     site->previous_allocation =
                             site->current_allocation;
-
                     site->current_allocation.reset();
             }
 
