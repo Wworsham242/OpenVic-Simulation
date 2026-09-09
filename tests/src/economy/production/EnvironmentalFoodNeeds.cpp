@@ -707,3 +707,164 @@ TEST_CASE(
         );
     }
 }
+
+TEST_CASE(
+    "004A4 zero survival stress produces zero basic-resource response",
+    "[convergence][004a4][population][health][migration][instability]"
+) {
+    const auto response =
+        calculate_basic_resource_stress_response(
+            fixed_point_t::_0,
+            fixed_point_t::_1
+        );
+
+    CHECK(response.survival_stress == fixed_point_t::_0);
+    CHECK(response.health_vulnerability_pressure == fixed_point_t::_0);
+    CHECK(response.mobility_push_pressure == fixed_point_t::_0);
+    CHECK(response.instability_pressure == fixed_point_t::_0);
+}
+
+TEST_CASE(
+    "004A4 survival stress produces health and migration pressure without fabricating instability",
+    "[convergence][004a4][population][health][migration]"
+) {
+    const auto response =
+        calculate_basic_resource_stress_response(
+            fixed_point_t::_0_50,
+            fixed_point_t::_0
+        );
+
+    CHECK(
+        response.health_vulnerability_pressure
+        == fixed_point_t::_0_50
+    );
+
+    CHECK(
+        response.mobility_push_pressure
+        == fixed_point_t::_0_50
+    );
+
+    CHECK(
+        response.instability_pressure
+        == fixed_point_t::_0
+    );
+}
+
+TEST_CASE(
+    "004A4 resource instability requires both deprivation and susceptibility",
+    "[convergence][004a4][population][instability]"
+) {
+    const auto low =
+        calculate_basic_resource_stress_response(
+            fixed_point_t::_0_50,
+            fixed_point_t::_0
+        );
+
+    const auto high =
+        calculate_basic_resource_stress_response(
+            fixed_point_t::_0_50,
+            fixed_point_t::_0_50
+        );
+
+    CHECK(
+        low.instability_pressure
+        == fixed_point_t::_0
+    );
+
+    CHECK(
+        high.instability_pressure
+        ==
+        fixed_point_t::_0_50 * fixed_point_t::_0_50
+    );
+
+    CHECK(
+        high.instability_pressure
+        > low.instability_pressure
+    );
+
+    CHECK(
+        high.health_vulnerability_pressure
+        == low.health_vulnerability_pressure
+    );
+
+    CHECK(
+        high.mobility_push_pressure
+        == low.mobility_push_pressure
+    );
+}
+
+TEST_CASE(
+    "004A4 drought reaches derived health and migration pressure through native food consumption",
+    "[convergence][004a4][environment][population][health][migration]"
+) {
+    FoodNeedsFixture fixture { fixed_point_t::_0_50 };
+
+    const auto first_day = fixture.run_cycle();
+
+    REQUIRE(
+        first_day.life_needs_fulfilled
+        < fixed_point_t::_1
+    );
+
+    CHECK(
+        fixture.consumer()
+            .get_basic_resource_stress_response()
+            .health_vulnerability_pressure
+        == fixed_point_t::_0
+    );
+
+    fixture.run_cycle();
+
+    const auto response =
+        fixture.consumer().get_basic_resource_stress_response();
+
+    CHECK(
+        response.survival_stress
+        > fixed_point_t::_0
+    );
+
+    CHECK(
+        response.health_vulnerability_pressure
+        > fixed_point_t::_0
+    );
+
+    CHECK(
+        response.mobility_push_pressure
+        > fixed_point_t::_0
+    );
+
+    /*
+     * This fixture begins with zero native militancy.
+     * Food scarcity alone therefore does not fabricate
+     * rebellion or war pressure.
+     */
+    CHECK(
+        response.instability_pressure
+        == fixed_point_t::_0
+    );
+}
+
+TEST_CASE(
+    "004A4 basic-resource response is bounded and deterministic",
+    "[convergence][004a4][population][determinism]"
+) {
+    const auto first =
+        calculate_basic_resource_stress_response(
+            fixed_point_t { 2 },
+            fixed_point_t { 2 }
+        );
+
+    const auto second =
+        calculate_basic_resource_stress_response(
+            fixed_point_t { 2 },
+            fixed_point_t { 2 }
+        );
+
+    CHECK(first == second);
+
+    CHECK(first.survival_stress == fixed_point_t::_1);
+    CHECK(first.health_vulnerability_pressure == fixed_point_t::_1);
+    CHECK(first.mobility_push_pressure == fixed_point_t::_1);
+    CHECK(first.instability_susceptibility == fixed_point_t::_1);
+    CHECK(first.instability_pressure == fixed_point_t::_1);
+}

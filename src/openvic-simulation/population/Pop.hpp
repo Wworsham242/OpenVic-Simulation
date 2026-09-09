@@ -11,6 +11,7 @@
 #include "openvic-simulation/population/PopIdInProvince.hpp"
 #include "openvic-simulation/population/PopNeedsMacro.hpp"
 #include "openvic-simulation/population/PopSize.hpp"
+#include "openvic-simulation/population/BasicResourceStressResponse.hpp"
 #include "openvic-simulation/population/SurvivalNeedsStress.hpp"
 #include "openvic-simulation/types/fixed_point/Atomic.hpp"
 #include "openvic-simulation/types/fixed_point/FixedPoint.hpp"
@@ -161,6 +162,13 @@ namespace OpenVic {
 
 		[[nodiscard]] SurvivalNeedsStressUpdate const& get_last_survival_needs_stress_update() const {
 			return last_survival_needs_stress_update;
+		}
+
+		[[nodiscard]] BasicResourceStressResponse get_basic_resource_stress_response() const {
+			return calculate_basic_resource_stress_response(
+				survival_needs_stress_exposure,
+				get_militancy() / fixed_point_t { 10 }
+			);
 		}
 
 	private:
