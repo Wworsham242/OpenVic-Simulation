@@ -539,6 +539,18 @@ void Pop::pop_tick_without_cleanup(
 	survival_needs_stress_exposure =
 		last_survival_needs_stress_update.exposure;
 
+	/*
+	 * 004A5 consumes the current nutrition-side health pressure.
+	 * The resulting burden is history-dependent and therefore stored.
+	 * It does not directly modify population size or mortality.
+	 */
+	last_nutrition_health_burden_update = update_nutrition_health_burden(
+		nutrition_health_burden,
+		get_basic_resource_stress_response().health_vulnerability_pressure
+	);
+	nutrition_health_burden =
+		last_nutrition_health_burden_update.burden;
+
 	fill_needs_fulfilled_goods_with_false();
 	
 	fixed_point_map_t<good_index_t> goods_to_sell {};

@@ -23,6 +23,7 @@
 #include "openvic-simulation/population/PopDeps.hpp"
 #include "openvic-simulation/population/PopType.hpp"
 #include "openvic-simulation/population/PopManager.hpp"
+#include "openvic-simulation/population/NutritionHealthBurden.hpp"
 #include "openvic-simulation/population/PopValuesFromProvince.hpp"
 #include "openvic-simulation/population/Religion.hpp"
 #include "openvic-simulation/utility/ThreadPool.hpp"
@@ -867,4 +868,190 @@ TEST_CASE(
     CHECK(first.mobility_push_pressure == fixed_point_t::_1);
     CHECK(first.instability_susceptibility == fixed_point_t::_1);
     CHECK(first.instability_pressure == fixed_point_t::_1);
+}
+
+TEST_CASE(
+    "004A5 no nutritional pressure preserves zero health burden",
+    "[convergence][004a5][population][health]"
+) {
+    const auto update =
+        update_nutrition_health_burden(
+            fixed_point_t::_0,
+            fixed_point_t::_0
+        );
+
+    CHECK(update.previous_burden == fixed_point_t::_0);
+    CHECK(update.health_vulnerability_pressure == fixed_point_t::_0);
+    CHECK(update.daily_change == fixed_point_t::_0);
+    CHECK(update.burden == fixed_point_t::_0);
+}
+
+TEST_CASE(
+    "004A5 nutritional health burden accumulates gradually rather than becoming instantaneous disease",
+    "[convergence][004a5][population][health]"
+) {
+    const auto update =
+        update_nutrition_health_burden(
+            fixed_point_t::_0,
+            fixed_point_t::_0_50
+        );
+
+    CHECK(
+        update.response_days
+        == fixed_point_t { NUTRITION_HEALTH_DETERIORATION_DAYS }
+    );
+
+    CHECK(update.daily_change > fixed_point_t::_0);
+    CHECK(update.burden > fixed_point_t::_0);
+    CHECK(update.burden < fixed_point_t::_0_50);
+}
+
+TEST_CASE(
+    "004A5 nutritional health recovery is slower than equivalent deterioration",
+    "[convergence][004a5][population][health][recovery]"
+) {
+    const auto deterioration =
+        update_nutrition_health_burden(
+            fixed_point_t::_0_50,
+            fixed_point_t::_1
+        );
+
+    const auto recovery =
+        update_nutrition_health_burden(
+            fixed_point_t::_0_50,
+            fixed_point_t::_0
+        );
+
+    CHECK(
+        deterioration.response_days
+        == fixed_point_t { NUTRITION_HEALTH_DETERIORATION_DAYS }
+    );
+
+    CHECK(
+        recovery.response_days
+        == fixed_point_t { NUTRITION_HEALTH_RECOVERY_DAYS }
+    );
+
+    CHECK(deterioration.daily_change > fixed_point_t::_0);
+    CHECK(recovery.daily_change < fixed_point_t::_0);
+
+    CHECK(
+        deterioration.daily_change
+        > -recovery.daily_change
+    );
+}
+
+TEST_CASE(
+    "004A5 drought propagates through native food consumption into lagged nutritional health burden",
+    "[convergence][004a5][environment][agriculture][market][population][health]"
+) {
+    FoodNeedsFixture fixture { fixed_point_t::_0_50 };
+
+    const auto first_day = fixture.run_cycle();
+
+    REQUIRE(
+        first_day.life_needs_fulfilled
+        < fixed_point_t::_1
+    );
+
+    // Day one shortage has not yet crossed the 004A3 lag.
+    CHECK(
+        fixture.consumer().get_nutrition_health_burden()
+        == fixed_point_t::_0
+    );
+
+    fixture.run_cycle();
+
+    const fixed_point_t second_day_burden =
+        fixture.consumer().get_nutrition_health_burden();
+
+    CHECK(
+        fixture.consumer().get_survival_needs_stress_exposure()
+        > fixed_point_t::_0
+    );
+
+    CHECK(second_day_burden > fixed_point_t::_0);
+    CHECK(second_day_burden < fixed_point_t::_1);
+
+    fixture.run_cycle();
+
+    CHECK(
+        fixture.consumer().get_nutrition_health_burden()
+        > second_day_burden
+    );
+}
+
+TEST_CASE(
+    "004A5 restored food eventually reverses accumulated nutritional health burden",
+    "[convergence][004a5][environment][population][health][recovery]"
+) {
+    FoodNeedsFixture fixture { fixed_point_t::_0_50 };
+
+    for (int day = 0; day < 10; ++day) {
+        fixture.run_cycle();
+    }
+
+    const fixed_point_t burden_at_recovery_start =
+        fixture.consumer().get_nutrition_health_burden();
+
+    REQUIRE(
+        burden_at_recovery_start
+        > fixed_point_t::_0
+    );
+
+    fixture.province->set_environmental_state(
+        ProvinceEnvironmentalState {}
+    );
+
+    fixed_point_t peak_burden =
+        burden_at_recovery_start;
+
+    for (int day = 0; day < 180; ++day) {
+        const auto result = fixture.run_cycle();
+
+        REQUIRE(
+            result.life_needs_fulfilled
+            == fixed_point_t::_1
+        );
+
+        peak_burden = std::max(
+            peak_burden,
+            fixture.consumer().get_nutrition_health_burden()
+        );
+    }
+
+    const fixed_point_t recovered_burden =
+        fixture.consumer().get_nutrition_health_burden();
+
+    /*
+     * Health burden can continue rising briefly after food supply
+     * recovers because the upstream 004A3 stress exposure also has
+     * memory. It must nevertheless eventually decline.
+     */
+    CHECK(recovered_burden < peak_burden);
+    CHECK(recovered_burden >= fixed_point_t::_0);
+}
+
+TEST_CASE(
+    "004A5 nutritional health burden calculation is bounded and deterministic",
+    "[convergence][004a5][population][health][determinism]"
+) {
+    const auto first =
+        update_nutrition_health_burden(
+            fixed_point_t { 2 },
+            fixed_point_t { -1 }
+        );
+
+    const auto second =
+        update_nutrition_health_burden(
+            fixed_point_t { 2 },
+            fixed_point_t { -1 }
+        );
+
+    CHECK(first == second);
+
+    CHECK(first.previous_burden == fixed_point_t::_1);
+    CHECK(first.health_vulnerability_pressure == fixed_point_t::_0);
+    CHECK(first.burden >= fixed_point_t::_0);
+    CHECK(first.burden <= fixed_point_t::_1);
 }
