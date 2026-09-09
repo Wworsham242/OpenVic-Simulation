@@ -21,6 +21,7 @@
 #include "openvic-simulation/economy/production/ProductiveSiteElectricityGridResolver.hpp"
 #include "openvic-simulation/economy/production/ProductiveSiteOperatingEconomics.hpp"
 #include "openvic-simulation/economy/production/ProductiveSiteWageFormation.hpp"
+#include "openvic-simulation/economy/production/ProductiveSiteUtilizationDecision.hpp"
 #include "openvic-simulation/economy/trading/LogisticsGraph.hpp"
 #include "openvic-simulation/economy/trading/MarketNodeAccess.hpp"
 #include "openvic-simulation/economy/trading/SharedTransportCapacity.hpp"
@@ -140,6 +141,10 @@ private:
         bool wage_formation_enabled = false;
         ProductiveSiteWageFormationPolicy wage_policy {};
         std::optional<ProductiveSiteWageFormationResult> last_wage_formation;
+        bool utilization_decision_enabled = false;
+        ProductiveSiteUtilizationDecisionPolicy utilization_policy {};
+        std::optional<ProductiveSiteUtilizationDecisionResult>
+            last_utilization_decision;
 
         static std::string make_employer_id(
             ProductiveSiteBinding const& binding
@@ -242,6 +247,10 @@ private:
     ProductiveSiteWageFormationPolicy upstream_wage_policy {};
     std::optional<ProductiveSiteWageFormationResult>
         upstream_last_wage_formation;
+    bool upstream_utilization_decision_enabled = false;
+    ProductiveSiteUtilizationDecisionPolicy upstream_utilization_policy {};
+    std::optional<ProductiveSiteUtilizationDecisionResult>
+        upstream_last_utilization_decision;
     std::vector<ProductiveSiteElectricityAllocation>
         latest_electricity_allocations;
 
@@ -1102,6 +1111,113 @@ preallocated_upstream_workforce = allocation;
 
 		return std::nullopt;
 	}
+
+
+    [[nodiscard]] bool set_upstream_site_utilization(
+        std::string_view employer_id,
+        fixed_point_t utilization
+    ) {
+        if (employer_id.empty() || utilization < fixed_point_t::_0 || utilization > fixed_point_t::_1) {
+            return false;
+        }
+        std::string const primary_id = upstream_employer_id.empty()
+            ? std::string { "site:primary" }
+            : upstream_employer_id;
+        if (employer_id == primary_id) {
+            upstream.set_utilization(utilization);
+            return true;
+        }
+        for (auto& site : additional_upstream_sites) {
+            if (site->employer_id == employer_id) {
+                site->producer.set_utilization(utilization);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    [[nodiscard]] std::optional<fixed_point_t> get_upstream_site_utilization(
+        std::string_view employer_id
+    ) const {
+        std::string const primary_id = upstream_employer_id.empty()
+            ? std::string { "site:primary" }
+            : upstream_employer_id;
+        if (employer_id == primary_id) {
+            return upstream.get_utilization();
+        }
+        for (auto const& site : additional_upstream_sites) {
+            if (site->employer_id == employer_id) {
+                return site->producer.get_utilization();
+            }
+        }
+        return std::nullopt;
+    }
+
+    [[nodiscard]] bool configure_upstream_site_utilization_decision(
+        std::string_view employer_id,
+        ProductiveSiteUtilizationDecisionPolicy const& policy
+    ) {
+        if (employer_id.empty() || !policy.is_valid()) {
+            return false;
+        }
+        std::string const primary_id = upstream_employer_id.empty()
+            ? std::string { "site:primary" }
+            : upstream_employer_id;
+        if (employer_id == primary_id) {
+            upstream_utilization_policy = policy;
+            upstream_utilization_decision_enabled = true;
+            return true;
+        }
+        for (auto& site : additional_upstream_sites) {
+            if (site->employer_id == employer_id) {
+                site->utilization_policy = policy;
+                site->utilization_decision_enabled = true;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    [[nodiscard]] bool set_upstream_site_utilization_decision_enabled(
+        std::string_view employer_id,
+        bool enabled
+    ) {
+        if (employer_id.empty()) {
+            return false;
+        }
+        std::string const primary_id = upstream_employer_id.empty()
+            ? std::string { "site:primary" }
+            : upstream_employer_id;
+        if (employer_id == primary_id) {
+            upstream_utilization_decision_enabled = enabled;
+            return true;
+        }
+        for (auto& site : additional_upstream_sites) {
+            if (site->employer_id == employer_id) {
+                site->utilization_decision_enabled = enabled;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    [[nodiscard]] std::optional<ProductiveSiteUtilizationDecisionResult>
+    get_upstream_site_last_utilization_decision(
+        std::string_view employer_id
+    ) const {
+        std::string const primary_id = upstream_employer_id.empty()
+            ? std::string { "site:primary" }
+            : upstream_employer_id;
+        if (employer_id == primary_id) {
+            return upstream_last_utilization_decision;
+        }
+        for (auto const& site : additional_upstream_sites) {
+            if (site->employer_id == employer_id) {
+                return site->last_utilization_decision;
+            }
+        }
+        return std::nullopt;
+    }
 
 	[[nodiscard]] bool set_upstream_capacity_from_facility(
 		BuildingType const& facility,
@@ -2003,6 +2119,42 @@ preallocated_upstream_workforce.reset();
                             site->compensation_per_worker =
                                     site->last_wage_formation->
                                         next_compensation;
+                    }
+            }
+
+
+            // B19: realized operating economics changes the NEXT cycle's
+            // short-run operating rate. Installed capacity and workforce
+            // adjustment remain separate causal decisions.
+            upstream_last_utilization_decision.reset();
+            if (upstream_utilization_decision_enabled && upstream_last_economics.has_value()) {
+                    upstream_last_utilization_decision =
+                            ProductiveSiteUtilizationDecision::calculate(
+                                    ProductiveSiteUtilizationDecisionInput {
+                                            .prior_utilization = upstream.get_utilization(),
+                                            .operating_surplus = upstream_last_economics->operating_surplus
+                                    },
+                                    upstream_utilization_policy
+                            );
+                    upstream.set_utilization(
+                            upstream_last_utilization_decision->next_utilization
+                    );
+            }
+
+            for (auto& site : additional_upstream_sites) {
+                    site->last_utilization_decision.reset();
+                    if (site->utilization_decision_enabled && site->last_economics.has_value()) {
+                            site->last_utilization_decision =
+                                    ProductiveSiteUtilizationDecision::calculate(
+                                            ProductiveSiteUtilizationDecisionInput {
+                                                    .prior_utilization = site->producer.get_utilization(),
+                                                    .operating_surplus = site->last_economics->operating_surplus
+                                            },
+                                            site->utilization_policy
+                                    );
+                            site->producer.set_utilization(
+                                    site->last_utilization_decision->next_utilization
+                            );
                     }
             }
 

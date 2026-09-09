@@ -4241,3 +4241,106 @@ TEST_CASE(
 	        no_wage_pop.get_life_needs_fulfilled()
 	);
 }
+
+
+TEST_CASE(
+    "Utilization decision responds to realized operating surplus and loss",
+    "[economy][utilization][profitability][b19]"
+) {
+    ProductiveSiteUtilizationDecisionPolicy policy {
+        .minimum_utilization = fixed_point_t::_0_10,
+        .maximum_utilization = fixed_point_t::_1,
+        .adjustment_rate = fixed_point_t::_1,
+        .surplus_for_full_response = fixed_point_t { 100 },
+        .profitability_weight = fixed_point_t::_1 / fixed_point_t { 2 }
+    };
+
+    auto profitable = ProductiveSiteUtilizationDecision::calculate(
+        ProductiveSiteUtilizationDecisionInput {
+            .prior_utilization = fixed_point_t::_1 / fixed_point_t { 2 },
+            .operating_surplus = fixed_point_t { 50 }
+        },
+        policy
+    );
+    auto loss = ProductiveSiteUtilizationDecision::calculate(
+        ProductiveSiteUtilizationDecisionInput {
+            .prior_utilization = fixed_point_t::_1 / fixed_point_t { 2 },
+            .operating_surplus = -fixed_point_t { 50 }
+        },
+        policy
+    );
+
+    CHECK(profitable.normalized_surplus_signal == fixed_point_t::_1 / fixed_point_t { 2 });
+    CHECK(profitable.profitability_pressure == fixed_point_t::_1 / fixed_point_t { 4 });
+    CHECK(profitable.next_utilization == fixed_point_t { 3 } / fixed_point_t { 4 });
+    CHECK(loss.normalized_surplus_signal == -fixed_point_t::_1 / fixed_point_t { 2 });
+    CHECK(loss.profitability_pressure == -fixed_point_t::_1 / fixed_point_t { 4 });
+    CHECK(loss.next_utilization == fixed_point_t::_1 / fixed_point_t { 4 });
+}
+
+TEST_CASE(
+    "Realized economics changes next-cycle productive-site utilization and output",
+    "[economy][utilization][runtime][feedback][b19]"
+) {
+    BoundWorldFixture lower_cost;
+    BoundWorldFixture higher_cost;
+
+    lower_cost.replace_population("1", 40);
+    higher_cost.replace_population("1", 40);
+
+    fixed_point_t const initial_utilization = fixed_point_t::_1 / fixed_point_t { 2 };
+    REQUIRE(lower_cost.runtime.set_upstream_site_utilization("site:1:plant", initial_utilization));
+    REQUIRE(higher_cost.runtime.set_upstream_site_utilization("site:1:plant", initial_utilization));
+    REQUIRE(higher_cost.runtime.set_upstream_site_compensation_per_worker("site:1:plant", fixed_point_t { 10 }));
+
+    ProductiveSiteUtilizationDecisionPolicy policy {
+        .minimum_utilization = fixed_point_t::_0_10,
+        .maximum_utilization = fixed_point_t::_1,
+        .adjustment_rate = fixed_point_t::_1,
+        .surplus_for_full_response = fixed_point_t { 1000 },
+        .profitability_weight = fixed_point_t::_1 / fixed_point_t { 2 }
+    };
+
+    REQUIRE(lower_cost.runtime.configure_upstream_site_utilization_decision("site:1:plant", policy));
+    REQUIRE(higher_cost.runtime.configure_upstream_site_utilization_decision("site:1:plant", policy));
+
+    // BoundWorldFixture's lightweight ThreadPool has no worker threads, so
+    // prepare_employment_phase() cannot run the normal province POP tick.
+    // Execute that native tick explicitly so cycle 1 starts from the same
+    // authoritative employment-reset state as the real InstanceManager.
+    lower_cost.native_pop_tick();
+    higher_cost.native_pop_tick();
+    lower_cost.cycle();
+    higher_cost.cycle();
+
+    CHECK(lower_cost.runtime.get_status().upstream_output == higher_cost.runtime.get_status().upstream_output);
+
+    auto low_economics = lower_cost.runtime.get_upstream_operating_economics();
+    auto high_economics = higher_cost.runtime.get_upstream_operating_economics();
+    REQUIRE(low_economics.has_value());
+    REQUIRE(high_economics.has_value());
+    CHECK(low_economics->operating_surplus > high_economics->operating_surplus);
+
+    auto low_utilization = lower_cost.runtime.get_upstream_site_utilization("site:1:plant");
+    auto high_utilization = higher_cost.runtime.get_upstream_site_utilization("site:1:plant");
+    REQUIRE(low_utilization.has_value());
+    REQUIRE(high_utilization.has_value());
+    CHECK(*low_utilization > *high_utilization);
+
+    auto low_decision = lower_cost.runtime.get_upstream_site_last_utilization_decision("site:1:plant");
+    auto high_decision = higher_cost.runtime.get_upstream_site_last_utilization_decision("site:1:plant");
+    REQUIRE(low_decision.has_value());
+    REQUIRE(high_decision.has_value());
+    CHECK(low_decision->normalized_surplus_signal > high_decision->normalized_surplus_signal);
+
+    // Reset authoritative POP employment again before cycle 2. Without this
+    // fixture-only step, both worlds retain cycle-1 employment and appear to
+    // have zero fresh labor, masking the physical effect of divergent
+    // utilization despite the utilization decision itself being correct.
+    lower_cost.native_pop_tick();
+    higher_cost.native_pop_tick();
+    lower_cost.cycle();
+    higher_cost.cycle();
+
+    CHECK(lower_cost.runtime.get_status().upstream_output > higher_cost.runtime.get_status().upstream_output);
+}
