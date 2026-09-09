@@ -33,11 +33,22 @@ struct ProductiveSiteMaterialTarget final {
 	AggregateProducerMarketBridge* bridge = nullptr;
 };
 
+/// Generic physical-inventory consumer sharing the same material flow solve.
+/// B13 uses this for generator fuel inventories without creating a second
+/// resource network or calling ResourceSupplyNetwork::fulfill() twice.
+struct MaterialInventoryTarget final {
+	std::string consumer_id;
+	GoodDefinition const* good = nullptr;
+	fixed_point_t desired_inventory = fixed_point_t::_0;
+	fixed_point_t* inventory = nullptr;
+};
+
 class ProductiveSiteMaterialFlowResolver final {
 private:
 	struct SourceTarget final {
 		std::string employer_id;
 		AggregateProducer* producer = nullptr;
+		fixed_point_t* direct_inventory = nullptr;
 		fixed_point_t shortfall = fixed_point_t::_0;
 		fixed_point_t accessible_request = fixed_point_t::_0;
 		fixed_point_t allocated = fixed_point_t::_0;
@@ -84,6 +95,7 @@ public:
 	[[nodiscard]] static ResourceFlowResult resolve(
 		std::vector<ProductiveSiteMaterialInput> inputs,
 		std::vector<ProductiveSiteMaterialTarget> const& material_targets,
+		std::vector<MaterialInventoryTarget> const& inventory_targets,
 		std::vector<ProductiveSiteResourceRoute> const& routes,
 		LogisticsGraph const& logistics_graph
 	) {
@@ -121,6 +133,24 @@ public:
 					.employer_id = target.employer_id,
 					.producer = target.producer,
 					.shortfall = target.bridge->calculate_input_shortfall(good)
+				});
+			}
+
+			for (MaterialInventoryTarget const& target : inventory_targets) {
+				if (
+					target.good != &good ||
+					target.inventory == nullptr
+				) {
+					continue;
+				}
+
+				input.targets.push_back(SourceTarget {
+					.employer_id = target.consumer_id,
+					.direct_inventory = target.inventory,
+					.shortfall = std::max(
+						target.desired_inventory - *target.inventory,
+						fixed_point_t::_0
+					)
 				});
 			}
 
@@ -224,7 +254,11 @@ public:
 							total_accessible_request
 					);
 
-					target.producer->add_inventory(*input.good, share);
+					if (target.producer != nullptr) {
+						target.producer->add_inventory(*input.good, share);
+					} else if (target.direct_inventory != nullptr) {
+						*target.direct_inventory += share;
+					}
 					target.allocated += share;
 					remaining -= share;
 				}
@@ -240,7 +274,11 @@ public:
 					fixed_point_t const extra = std::min(unmet, remaining);
 
 					if (extra > fixed_point_t::_0) {
-						target.producer->add_inventory(*input.good, extra);
+						if (target.producer != nullptr) {
+							target.producer->add_inventory(*input.good, extra);
+						} else if (target.direct_inventory != nullptr) {
+							*target.direct_inventory += extra;
+						}
 						target.allocated += extra;
 						remaining -= extra;
 					}
@@ -251,6 +289,21 @@ public:
 		}
 
 		return primary_result;
+	}
+
+	[[nodiscard]] static ResourceFlowResult resolve(
+		std::vector<ProductiveSiteMaterialInput> inputs,
+		std::vector<ProductiveSiteMaterialTarget> const& material_targets,
+		std::vector<ProductiveSiteResourceRoute> const& routes,
+		LogisticsGraph const& logistics_graph
+	) {
+		return resolve(
+			std::move(inputs),
+			material_targets,
+			{},
+			routes,
+			logistics_graph
+		);
 	}
 };
 

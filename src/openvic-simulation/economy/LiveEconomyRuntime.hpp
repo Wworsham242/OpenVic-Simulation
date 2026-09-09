@@ -421,9 +421,40 @@ private:
             });
         }
 
+        std::vector<MaterialInventoryTarget> inventory_targets;
+
+        for (ProductiveSiteElectricitySource& source : electricity_sources) {
+            if (
+                source.fuel_good == nullptr ||
+                source.fuel_per_output <= fixed_point_t::_0
+            ) {
+                continue;
+            }
+
+            fixed_point_t const desired_inventory =
+                std::max(
+                    source.available_generation_per_tick,
+                    fixed_point_t::_0
+                ) *
+                std::clamp(
+                    source.availability_fraction,
+                    fixed_point_t::_0,
+                    fixed_point_t::_1
+                ) *
+                source.fuel_per_output;
+
+            inventory_targets.push_back(MaterialInventoryTarget {
+                .consumer_id = std::string { "generator:" } + source.source_id,
+                .good = source.fuel_good,
+                .desired_inventory = desired_inventory,
+                .inventory = &source.fuel_inventory
+            });
+        }
+
         return ProductiveSiteMaterialFlowResolver::resolve(
             std::move(inputs),
             targets,
+            inventory_targets,
             upstream_site_resource_routes,
             logistics_graph
         );
@@ -1058,7 +1089,11 @@ preallocated_upstream_workforce = allocation;
 				source.ramp_up_per_tick < fixed_point_t::_0 ||
 				source.ramp_down_per_tick < fixed_point_t::_0 ||
 				source.marginal_cost < fixed_point_t::_0 ||
-				source.current_dispatch_per_tick < fixed_point_t::_0
+				source.current_dispatch_per_tick < fixed_point_t::_0 ||
+				source.fuel_per_output < fixed_point_t::_0 ||
+				source.fuel_inventory < fixed_point_t::_0 ||
+				(source.fuel_good == nullptr &&
+					source.fuel_per_output > fixed_point_t::_0)
 			) {
 				return false;
 			}
@@ -1133,6 +1168,33 @@ preallocated_upstream_workforce = allocation;
 			std::move(transmission_edges),
 			std::move(connections)
 		);
+	}
+
+	[[nodiscard]] bool configure_upstream_electricity_source_fuel(
+		std::string_view source_id,
+		GoodDefinition const* fuel_good,
+		fixed_point_t fuel_per_output,
+		fixed_point_t initial_inventory
+	) {
+		if (
+			!electricity_grid_configured ||
+			fuel_good == nullptr ||
+			fuel_per_output <= fixed_point_t::_0 ||
+			initial_inventory < fixed_point_t::_0
+		) {
+			return false;
+		}
+
+		for (ProductiveSiteElectricitySource& source : electricity_sources) {
+			if (source.source_id == source_id) {
+				source.fuel_good = fuel_good;
+				source.fuel_per_output = fuel_per_output;
+				source.fuel_inventory = initial_inventory;
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	[[nodiscard]] bool set_upstream_electricity_source_availability(

@@ -37,6 +37,12 @@ struct ProductiveSiteElectricitySource final {
 
 	// Stateful runtime dispatch history used by ramp constraints.
 	fixed_point_t current_dispatch_per_tick = fixed_point_t::_0;
+
+	// B13 optional physical fuel requirement. A null fuel_good means this
+	// generator requires no material fuel (e.g. wind/solar/hydro abstraction).
+	GoodDefinition const* fuel_good = nullptr;
+	fixed_point_t fuel_per_output = fixed_point_t::_0;
+	fixed_point_t fuel_inventory = fixed_point_t::_0;
 };
 
 struct ProductiveSiteElectricityAllocation final {
@@ -597,8 +603,24 @@ public:
 			fixed_point_t const availability_limited =
 				nameplate * availability;
 
+			fixed_point_t fuel_limited =
+				fixed_point_t::usable_max;
+
+			if (
+				source.fuel_good != nullptr &&
+				source.fuel_per_output > fixed_point_t::_0
+			) {
+				fuel_limited = std::max(
+					source.fuel_inventory,
+					fixed_point_t::_0
+				) / source.fuel_per_output;
+			}
+
 			fixed_point_t const ramp_up_limited = std::min(
-				availability_limited,
+				std::min(
+					availability_limited,
+					fuel_limited
+				),
 				source.current_dispatch_per_tick +
 					std::max(
 						source.ramp_up_per_tick,
@@ -729,23 +751,36 @@ public:
 			}
 		}
 
+		std::vector<SourceLoadDelivery> actual_deliveries;
+		if (!allocations.empty()) {
+			std::vector<Load> load_copy = loads;
+			accumulate_allocations(
+				allocations,
+				load_copy,
+				actual_deliveries
+			);
+		}
+
 		for (ProductiveSiteElectricitySource& source : sources) {
 			source.current_dispatch_per_tick =
 				delivered_by_source(
-					allocations.empty()
-						? std::vector<SourceLoadDelivery> {}
-						: [&]() {
-							std::vector<SourceLoadDelivery> delivered;
-							std::vector<Load> load_copy = loads;
-							accumulate_allocations(
-								allocations,
-								load_copy,
-								delivered
-							);
-							return delivered;
-						}(),
+					actual_deliveries,
 					source.source_id
 				);
+
+			if (
+				source.fuel_good != nullptr &&
+				source.fuel_per_output > fixed_point_t::_0
+			) {
+				fixed_point_t const consumed =
+					source.current_dispatch_per_tick *
+					source.fuel_per_output;
+
+				source.fuel_inventory = std::max(
+					source.fuel_inventory - consumed,
+					fixed_point_t::_0
+				);
+			}
 		}
 
 		return results;

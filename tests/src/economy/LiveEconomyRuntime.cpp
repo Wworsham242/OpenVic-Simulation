@@ -3097,3 +3097,260 @@ TEST_CASE(
 	CHECK(half->upstream.external_limited);
 	CHECK(half->upstream.actual_output == fixed_point_t { 2 });
 }
+
+TEST_CASE(
+	"Generator fuel inventory physically limits dispatch and is consumed",
+	"[economy][utilities][electricity-grid][generator-fuel][b13]"
+) {
+	LiveEconomyFixture fixture;
+
+	AggregateProducer plant {
+		"fuel-limited-plant",
+		*fixture.upstream_process,
+		fixed_point_t { 4 },
+		fixed_point_t::_1
+	};
+
+	std::vector<ProductiveSiteUtilityTarget> targets {
+		{
+			.employer_id = "fuel-limited-plant",
+			.producer = &plant
+		}
+	};
+
+	std::vector<ProductiveSiteUtilityRequirement> requirements {
+		{
+			.employer_id = "fuel-limited-plant",
+			.kind = ProductiveSiteUtilityKind::Electricity,
+			.required_per_output = fixed_point_t::_1,
+			.available_per_tick = fixed_point_t::_0
+		}
+	};
+
+	LogisticsGraph transmission;
+	REQUIRE(
+		transmission.configure(
+			{
+				LogisticsGraphEdge {
+					.edge_id = "fuel-generator-line",
+					.source = market_node_index_t { 0 },
+					.destination = market_node_index_t { 10 },
+					.leg = TransportLeg {
+						.nominal_capacity = fixed_point_t { 4 }
+					}
+				}
+			}
+		)
+	);
+
+	std::vector<ProductiveSiteElectricitySource> sources {
+		ProductiveSiteElectricitySource {
+			.source_id = "gas_unit",
+			.source_node = market_node_index_t { 0 },
+			.available_generation_per_tick = fixed_point_t { 4 },
+			.ramp_up_per_tick = fixed_point_t { 4 },
+			.ramp_down_per_tick = fixed_point_t { 4 },
+			.fuel_good = fixture.feedstock,
+			.fuel_per_output = fixed_point_t { 2 },
+			.fuel_inventory = fixed_point_t { 4 }
+		}
+	};
+
+	auto allocations =
+		ProductiveSiteElectricityGridResolver::resolve_sources_stateful(
+			sources,
+			transmission,
+			{
+				ProductiveSiteElectricityConnection {
+					.employer_id = "fuel-limited-plant",
+					.destination_node = market_node_index_t { 10 }
+				}
+			},
+			targets,
+			requirements
+		);
+
+	REQUIRE(allocations.size() == 1);
+	CHECK(allocations[0].delivered == fixed_point_t { 2 });
+	CHECK(sources[0].current_dispatch_per_tick == fixed_point_t { 2 });
+	CHECK(sources[0].fuel_inventory == fixed_point_t::_0);
+}
+
+TEST_CASE(
+	"Generator fuel replenishment shares authoritative material allocation",
+	"[economy][materials][generator-fuel][shared-supply][b13]"
+) {
+	LiveEconomyFixture fixture;
+
+	AggregateProducer producer {
+		"factory",
+		*fixture.upstream_process,
+		fixed_point_t { 2 },
+		fixed_point_t::_1
+	};
+	AggregateProducerMarketBridge bridge { producer };
+
+	fixed_point_t generator_inventory = fixed_point_t::_0;
+
+	ResourceSupplyNetwork network {
+		{
+			ResourceSourceState {
+				.source_id = "shared-fuel-source",
+				.node = market_node_index_t { 0 },
+				.supply = ResourceSupplyState {
+					.nominal_per_tick = fixed_point_t { 4 }
+				}
+			}
+		}
+	};
+
+	LogisticsGraph logistics;
+	REQUIRE(
+		logistics.configure(
+			{
+				LogisticsGraphEdge {
+					.edge_id = "shared-freight",
+					.source = market_node_index_t { 0 },
+					.destination = market_node_index_t { 10 },
+					.leg = TransportLeg {
+						.nominal_capacity = fixed_point_t { 4 }
+					}
+				}
+			}
+		)
+	);
+
+	auto result = ProductiveSiteMaterialFlowResolver::resolve(
+		{
+			ProductiveSiteMaterialInput {
+				.good = fixture.feedstock,
+				.desired_flow = fixed_point_t { 4 },
+				.network = &network,
+				.primary = true
+			}
+		},
+		{
+			ProductiveSiteMaterialTarget {
+				.employer_id = "factory",
+				.producer = &producer,
+				.bridge = &bridge
+			}
+		},
+		{
+			MaterialInventoryTarget {
+				.consumer_id = "generator:gas",
+				.good = fixture.feedstock,
+				.desired_inventory = fixed_point_t { 2 },
+				.inventory = &generator_inventory
+			}
+		},
+		{
+			ProductiveSiteResourceRoute {
+				.employer_id = "factory",
+				.source_node = market_node_index_t { 0 },
+				.destination_node = market_node_index_t { 10 },
+				.good = fixture.feedstock
+			},
+			ProductiveSiteResourceRoute {
+				.employer_id = "generator:gas",
+				.source_node = market_node_index_t { 0 },
+				.destination_node = market_node_index_t { 10 },
+				.good = fixture.feedstock
+			}
+		},
+		logistics
+	);
+
+	CHECK(result.delivered == fixed_point_t { 4 });
+
+	// Factory and generator are resolved inside one source-network call and
+	// one shared logistics batch; their combined receipt cannot exceed 4.
+	CHECK(
+		producer.get_inventory(*fixture.feedstock) +
+			generator_inventory ==
+		fixed_point_t { 4 }
+	);
+	CHECK(generator_inventory > fixed_point_t::_0);
+}
+
+TEST_CASE(
+	"Runtime generator fuel shortage propagates into industrial output",
+	"[economy][utilities][electricity-grid][generator-fuel][runtime][b13]"
+) {
+	LiveEconomyFixture fixture;
+	GoodInstanceManager goods { fixture.definitions, fixture.rules };
+	auto scenario = fixture.make_scenario();
+
+	// Isolate the electricity causal leg in this regression. The separate
+	// shared-supply B13 test covers factory/generator competition for scarce
+	// feedstock. Here there is enough incoming material for both the factory
+	// and generator replenishment, so the initial 2-unit generator fuel stock
+	// is the only reason industrial output is capped at 2.
+	scenario.source_inflow_per_daily_tick = fixed_point_t { 8 };
+
+	LiveEconomyRuntime runtime { fixture.rules, goods, scenario };
+
+	REQUIRE(
+		runtime.configure_upstream_site_utility_requirements(
+			{
+				ProductiveSiteUtilityRequirement {
+					.employer_id = "site:primary",
+					.kind = ProductiveSiteUtilityKind::Electricity,
+					.required_per_output = fixed_point_t::_1,
+					.available_per_tick = fixed_point_t::_0
+				}
+			}
+		)
+	);
+
+	REQUIRE(
+		runtime.configure_upstream_electricity_sources(
+			{
+				ProductiveSiteElectricitySource {
+					.source_id = "fuelled_unit",
+					.source_node = market_node_index_t { 0 },
+					.available_generation_per_tick = fixed_point_t { 4 },
+					.ramp_up_per_tick = fixed_point_t { 4 },
+					.ramp_down_per_tick = fixed_point_t { 4 }
+				}
+			},
+			{
+				LogisticsGraphEdge {
+					.edge_id = "fuelled-unit-line",
+					.source = market_node_index_t { 0 },
+					.destination = market_node_index_t { 10 },
+					.leg = TransportLeg {
+						.nominal_capacity = fixed_point_t { 4 }
+					}
+				}
+			},
+			{
+				ProductiveSiteElectricityConnection {
+					.employer_id = "site:primary",
+					.destination_node = market_node_index_t { 10 }
+				}
+			}
+		)
+	);
+
+	REQUIRE(
+		runtime.configure_upstream_electricity_source_fuel(
+			"fuelled_unit",
+			scenario.source_inflow_good,
+			fixed_point_t::_1,
+			fixed_point_t { 2 }
+		)
+	);
+
+	GoodInstance& intermediate_market =
+		goods.get_good_instance_by_definition(*fixture.intermediate);
+
+	runtime.pre_market_daily_tick();
+	execute_intermediate_market(intermediate_market);
+	runtime.post_market_daily_tick();
+
+	auto limited = runtime.get_latest_provenance();
+	REQUIRE(limited.has_value());
+	CHECK(limited->upstream.external_limited);
+	CHECK(limited->upstream.actual_output == fixed_point_t { 2 });
+}
