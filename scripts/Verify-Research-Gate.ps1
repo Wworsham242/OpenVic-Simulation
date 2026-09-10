@@ -79,9 +79,27 @@ if ($Staged) {
         git diff --name-only --diff-filter=ACMR
     )
 
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to inspect tracked worktree changes."
+    }
+
     $changed += @(
         git diff --cached --name-only --diff-filter=ACMR
     )
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to inspect staged changes."
+    }
+
+    # git diff does not report untracked files. New convergence documents
+    # must still pass the research gate before they are staged.
+    $changed += @(
+        git ls-files --others --exclude-standard
+    )
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to inspect untracked files."
+    }
 
     $changed = @(
         $changed |
