@@ -14,6 +14,7 @@
 #include "openvic-simulation/military/UnitBranchedGetterMacro.hpp"
 #include "openvic-simulation/modifier/ModifierSum.hpp"
 #include "openvic-simulation/population/Pop.hpp"
+#include "openvic-simulation/population/ProvinceDemographicAgeSexState.hpp"
 #include "openvic-simulation/population/PopIdInProvince.hpp"
 #include "openvic-simulation/population/PopsAggregate.hpp"
 #include "openvic-simulation/types/ColonyStatus.hpp"
@@ -120,6 +121,8 @@ namespace OpenVic {
 		OV_UNIT_BRANCHED_GETTER_CONST(get_unit_instance_groups, armies, navies);
 
 	private:
+		ProvinceDemographicAgeSexState demographic_age_sex_state {};
+
 		pop_id_in_province_t last_pop_id{0};
 		memory::colony<Pop> PROPERTY(pops); // TODO - replace with a more easily vectorisable container?
 		void _update_pops(MilitaryDefines const& military_defines);
@@ -196,6 +199,34 @@ return rgo;
 			PopDeps const& pop_deps
 		);
 		size_t get_pop_count() const;
+
+		bool initialize_demographic_age_sex_structure(
+			DemographicAgeSexProfile const& profile
+		) {
+			return demographic_age_sex_state.initialize(
+				profile,
+				get_total_population()
+			);
+		}
+
+		[[nodiscard]] bool
+		has_demographic_age_sex_structure() const {
+			return demographic_age_sex_state.has_structure();
+		}
+
+		[[nodiscard]] PopulationAgeSexStructure const*
+		get_demographic_age_sex_structure_nullable() const {
+			return demographic_age_sex_state
+				.get_structure_nullable();
+		}
+
+		[[nodiscard]] bool
+		is_demographic_age_sex_structure_consistent() const {
+			return demographic_age_sex_state
+				.is_consistent_with_population(
+					get_total_population()
+				);
+		}
 
 		void update_modifier_sum(Date today, StaticModifierCache const& static_modifier_cache);
 		void update_country_modifier_sum();
