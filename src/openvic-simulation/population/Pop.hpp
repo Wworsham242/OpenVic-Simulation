@@ -11,6 +11,7 @@
 #include "openvic-simulation/population/PopIdInProvince.hpp"
 #include "openvic-simulation/population/PopNeedsMacro.hpp"
 #include "openvic-simulation/population/PopSize.hpp"
+#include "openvic-simulation/population/PopDemographicAgeSexState.hpp"
 #include "openvic-simulation/population/BasicResourceStressResponse.hpp"
 #include "openvic-simulation/population/NutritionHealthBurden.hpp"
 #include "openvic-simulation/population/SurvivalNeedsStress.hpp"
@@ -97,11 +98,40 @@ namespace OpenVic {
 		fixed_point_t cash_allocated_for_artisanal_spending = 0;
 		pop_size_t employed = 0;
 
+		/* 004A8: absent unless explicitly initialized. */
+		PopDemographicAgeSexState demographic_age_sex_state {};
+
 		const std::reference_wrapper<ProvinceInstance> PROPERTY(location);
 
 	public:
 		[[nodiscard]] constexpr ProvinceInstance& get_location() {
 			return location;
+		}
+
+		bool initialize_demographic_age_sex_structure(
+			DemographicAgeSexProfile const& profile
+		) {
+			return demographic_age_sex_state.initialize(
+				profile,
+				size
+			);
+		}
+
+		[[nodiscard]] bool
+		has_demographic_age_sex_structure() const {
+			return demographic_age_sex_state.has_structure();
+		}
+
+		[[nodiscard]] PopulationAgeSexStructure const*
+		get_demographic_age_sex_structure_nullable() const {
+			return demographic_age_sex_state
+				.get_structure_nullable();
+		}
+
+		[[nodiscard]] bool
+		is_demographic_age_sex_structure_consistent() const {
+			return demographic_age_sex_state
+				.is_consistent_with_population(size);
 		}
 
 	private:
