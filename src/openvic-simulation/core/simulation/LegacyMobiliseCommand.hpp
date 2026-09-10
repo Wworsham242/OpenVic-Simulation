@@ -1,9 +1,13 @@
 #pragma once
 
+#include "openvic-simulation/core/simulation/CommandTargetIdentity.hpp"
 #include "openvic-simulation/types/TypedIndices.hpp"
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 #include <type_safe/strong_typedef.hpp>
@@ -15,6 +19,21 @@ struct LegacyMobiliseCommand final {
 	static constexpr uint32_t PAYLOAD_SCHEMA_VERSION = 1;
 	static constexpr std::size_t PAYLOAD_SIZE = 5;
 
+	[[nodiscard]] static CommandTargetIdentity resolve_target_identity(
+		std::string_view country_identifier
+	) {
+		if (country_identifier.empty()) {
+			return {};
+		}
+
+		std::string qualified_identity { "country:" };
+		qualified_identity += country_identifier;
+
+		return CommandTargetIdentity {
+			.target_id = qualified_identity,
+			.jurisdiction_id = std::move(qualified_identity)
+		};
+	}
 	[[nodiscard]] static std::vector<uint8_t> encode(
 		country_index_t country_index,
 		bool new_is_mobilised

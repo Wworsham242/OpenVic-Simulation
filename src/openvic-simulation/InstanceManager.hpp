@@ -8,6 +8,7 @@
 #include "openvic-simulation/console/ConsoleInstance.hpp"
 #include "openvic-simulation/core/memory/Vector.hpp"
 #include "openvic-simulation/core/simulation/AuthorityRegistry.hpp"
+#include "openvic-simulation/core/simulation/CommandTargetIdentity.hpp"
 #include "openvic-simulation/core/simulation/LegacyMobiliseCommand.hpp"
 #include "openvic-simulation/core/simulation/LiveCommandTimelineSnapshot.hpp"
 #include "openvic-simulation/core/simulation/PositionSessionBootstrap.hpp"
@@ -314,6 +315,34 @@ namespace OpenVic {
 		/// Submit through generalized authority using authoritative simulation time.
 		///
 		/// FOUNDATION-009 records authorized commands but does not yet execute domain mutation.
+		/// Admit a command only after its concrete domain target has been
+		/// resolved to a canonical target/jurisdiction identity.
+		///
+		/// Domain adapters resolve their own target types. This generalized
+		/// boundary deliberately knows nothing about countries, provinces,
+		/// formations, firms, institutions, or any particular game era.
+		[[nodiscard]] CommandAdmissionResult submit_authorized_targeted_command(
+			std::string actor_id,
+			std::string command_type,
+			std::string requested_jurisdiction_id,
+			CommandTargetIdentity const& target,
+			std::vector<uint8_t> payload
+		) {
+			if (!target.is_canonical()) {
+				return CommandAdmissionResult::invalid_request;
+			}
+
+			if (!target.matches_jurisdiction(requested_jurisdiction_id)) {
+				return CommandAdmissionResult::unauthorized;
+			}
+
+			return submit_authorized_command(
+				std::move(actor_id),
+				std::move(command_type),
+				target.jurisdiction_id,
+				std::move(payload)
+			);
+		}
 		[[nodiscard]] CommandAdmissionResult submit_authorized_command(
 			std::string actor_id,
 			std::string command_type,

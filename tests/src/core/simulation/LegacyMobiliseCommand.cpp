@@ -70,3 +70,20 @@ TEST_CASE("Mobilise command type is stable", "[foundation][command][legacy][iden
 	CHECK(std::string { LegacyMobiliseCommand::COMMAND_TYPE } == "military.set_mobilised");
 	CHECK(LegacyMobiliseCommand::PAYLOAD_SCHEMA_VERSION == 1);
 }
+TEST_CASE(
+	"Legacy mobilise maps country identity to generic target identity",
+	"[convergence][authority][target][legacy][military]"
+) {
+	CommandTargetIdentity const target =
+		LegacyMobiliseCommand::resolve_target_identity("TST");
+
+	REQUIRE(target.is_canonical());
+	CHECK(target.target_id == "country:TST");
+	CHECK(target.jurisdiction_id == "country:TST");
+	CHECK(target.matches_jurisdiction("country:TST"));
+	CHECK_FALSE(target.matches_jurisdiction("country:OTHER"));
+
+	CHECK_FALSE(
+		LegacyMobiliseCommand::resolve_target_identity("").is_canonical()
+	);
+}

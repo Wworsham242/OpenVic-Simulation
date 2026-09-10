@@ -462,21 +462,49 @@ CommandAdmissionResult InstanceManager::queue_authorized_legacy_mobilise(
 		return CommandAdmissionResult::invalid_request;
 	}
 
-	std::vector<uint8_t> const payload =
-		LegacyMobiliseCommand::encode(country_index, new_is_mobilised);
+	// Legacy/domain-specific adapter:
+	// country_index_t -> CountryInstance -> generic CommandTargetIdentity.
+	//
+	// The generalized authority layer remains unaware of CountryInstance.
+	auto const countries = country_instance_manager.get_country_instances();
 
-	CommandAdmissionResult const admission = submit_authorized_command(
-		std::move(actor_id),
-		LegacyMobiliseCommand::COMMAND_TYPE,
-		std::move(jurisdiction_id),
-		payload
-	);
+	std::size_t const raw_country_index =
+		static_cast<std::size_t>(type_safe::get(country_index));
+
+	if (raw_country_index >= countries.size()) {
+		return CommandAdmissionResult::invalid_request;
+	}
+
+	CountryInstance const& target_country = countries[raw_country_index];
+
+	CommandTargetIdentity const target =
+		LegacyMobiliseCommand::resolve_target_identity(
+			target_country.get_identifier()
+		);
+
+	std::vector<uint8_t> const payload =
+		LegacyMobiliseCommand::encode(
+			country_index,
+			new_is_mobilised
+		);
+
+	CommandAdmissionResult const admission =
+		submit_authorized_targeted_command(
+			std::move(actor_id),
+			LegacyMobiliseCommand::COMMAND_TYPE,
+			std::move(jurisdiction_id),
+			target,
+			payload
+		);
 
 	if (admission != CommandAdmissionResult::accepted) {
 		return admission;
 	}
 
-	if (!queue_game_action<set_mobilise_argument_t>(country_index, new_is_mobilised)) {
+	if (!queue_game_action<set_mobilise_argument_t>(
+		country_index,
+		new_is_mobilised
+	)) {
 		spdlog::error_s(
 			"Authorized mobilise command was accepted but legacy GameAction queueing failed."
 		);

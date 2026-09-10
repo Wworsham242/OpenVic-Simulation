@@ -165,3 +165,120 @@ TEST_CASE(
 	CHECK_FALSE(manager.is_game_instance_setup());
 	CHECK_FALSE(manager.is_game_session_active());
 }
+TEST_CASE(
+	"Resolved target mismatch is rejected before command admission",
+	"[convergence][native-bootstrap][authority][target][atomicity]"
+) {
+	GameManager manager {
+		[]() {},
+		[]() -> uint64_t { return 0; },
+		[]() -> uint64_t { return 0; }
+	};
+
+	REQUIRE(manager.setup_native_instance());
+
+	InstanceManager* const instance = manager.get_instance_manager();
+	REQUIRE(instance != nullptr);
+
+	REQUIRE(instance->register_actor_authority(ActorAuthorityProfile {
+		.actor_id = "position:test",
+		.grants = {
+			AuthorityGrant {
+				.command_type = "test.targeted.command",
+				.jurisdiction_id = "jurisdiction:A"
+			}
+		}
+	}));
+
+	CommandTargetIdentity const resolved_target {
+		.target_id = "target:A",
+		.jurisdiction_id = "jurisdiction:A"
+	};
+
+	auto const before_log =
+		instance->capture_accepted_command_log();
+
+	uint64_t const before_count =
+		instance->get_accepted_command_count();
+
+	CHECK(
+		instance->submit_authorized_targeted_command(
+			"position:test",
+			"test.targeted.command",
+			"jurisdiction:B",
+			resolved_target,
+			{}
+		) == CommandAdmissionResult::unauthorized
+	);
+
+	CHECK(instance->get_accepted_command_count() == before_count);
+	CHECK(instance->capture_accepted_command_log() == before_log);
+
+	CHECK(
+		instance->submit_authorized_targeted_command(
+			"position:test",
+			"test.targeted.command",
+			"jurisdiction:A",
+			resolved_target,
+			{}
+		) == CommandAdmissionResult::accepted
+	);
+
+	CHECK(instance->get_accepted_command_count() == before_count + 1);
+
+	auto const accepted_log =
+		instance->capture_accepted_command_log();
+
+	REQUIRE(accepted_log.size() == before_log.size() + 1);
+	CHECK(accepted_log.back().jurisdiction_id == "jurisdiction:A");
+
+	REQUIRE(manager.end_game_session());
+}
+
+TEST_CASE(
+	"Invalid legacy target is rejected before command admission",
+	"[convergence][native-bootstrap][authority][target][legacy][atomicity]"
+) {
+	GameManager manager {
+		[]() {},
+		[]() -> uint64_t { return 0; },
+		[]() -> uint64_t { return 0; }
+	};
+
+	REQUIRE(manager.setup_native_instance());
+
+	InstanceManager* const instance = manager.get_instance_manager();
+	REQUIRE(instance != nullptr);
+
+	REQUIRE(instance->register_actor_authority(ActorAuthorityProfile {
+		.actor_id = "position:test",
+		.grants = {
+			AuthorityGrant {
+				.command_type = LegacyMobiliseCommand::COMMAND_TYPE,
+				.jurisdiction_id = "country:TST"
+			}
+		}
+	}));
+
+	auto const before_log =
+		instance->capture_accepted_command_log();
+
+	uint64_t const before_count =
+		instance->get_accepted_command_count();
+
+	// Native setup has no countries. The index therefore cannot resolve
+	// to a concrete target and must fail before generalized admission.
+	CHECK(
+		instance->queue_authorized_legacy_mobilise(
+			"position:test",
+			"country:TST",
+			country_index_t { 0u },
+			true
+		) == CommandAdmissionResult::invalid_request
+	);
+
+	CHECK(instance->get_accepted_command_count() == before_count);
+	CHECK(instance->capture_accepted_command_log() == before_log);
+
+	REQUIRE(manager.end_game_session());
+}
