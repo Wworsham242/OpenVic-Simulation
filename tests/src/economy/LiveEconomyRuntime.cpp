@@ -372,14 +372,41 @@ namespace {
 			}
 		}
 
-		Pop make_pop(PopType const& type, int size, size_t id, ProvinceInstance* location = nullptr) {
-			struct InitialPop : PopBase {
-				InitialPop(PopType const& type, Culture const& culture, Religion const& religion, int size)
-					: PopBase { type, culture, religion, pop_size_t { size }, 0, 0, nullptr } {}
-			};
-			return Pop { location != nullptr ? *location : province, InitialPop { type, culture, religion, size },
-				pop_deps, pop_id_in_province_t { id } };
-		}
+		Pop make_pop(
+PopType const& type,
+int size,
+size_t id,
+ProvinceInstance* location = nullptr,
+bool enable_nutrition_health_capability = true
+) {
+struct InitialPop : PopBase {
+InitialPop(
+PopType const& type,
+Culture const& culture,
+Religion const& religion,
+int size
+) : PopBase {
+type,
+culture,
+religion,
+pop_size_t { size },
+0,
+0,
+nullptr
+} {}
+};
+
+PopDeps deps = pop_deps;
+deps.enable_nutrition_health_capability =
+enable_nutrition_health_capability;
+
+return Pop {
+location != nullptr ? *location : province,
+InitialPop { type, culture, religion, size },
+deps,
+pop_id_in_province_t { id }
+};
+}
 	};
 
 	memory::vector<Job> workforce_jobs() {
@@ -391,6 +418,74 @@ namespace {
 	}
 }
 
+TEST_CASE(
+"005A5 disabled nutrition capability preserves POP employment authority",
+"[convergence][005a5][population][optional-capability][integration][native-workforce]"
+) {
+LiveEconomyFixture fixture {
+workforce_jobs(),
+pop_size_t { 10 },
+ProductionType::template_type_t::PROCESS
+};
+
+GoodInstanceManager goods {
+fixture.definitions,
+fixture.rules
+};
+
+WorkforcePopFixture population {
+fixture.rules,
+goods
+};
+
+Pop pop = population.make_pop(
+population.eligible,
+40,
+1,
+nullptr,
+false
+);
+
+CHECK_FALSE(
+pop.has_nutrition_health_capability()
+);
+
+CHECK(
+pop.get_nutrition_health_burden()
+== fixed_point_t::_0
+);
+
+CHECK(
+pop.get_last_nutrition_health_burden_update_nullable()
+== nullptr
+);
+
+CHECK(
+pop.get_size()
+== pop_size_t { 40 }
+);
+
+CHECK(
+pop.get_unemployed()
+== pop_size_t { 40 }
+);
+
+pop.hire(pop_size_t { 15 });
+
+CHECK(
+pop.get_size()
+== pop_size_t { 40 }
+);
+
+CHECK(
+pop.get_unemployed()
+== pop_size_t { 25 }
+);
+
+CHECK_FALSE(
+pop.has_nutrition_health_capability()
+);
+}
 TEST_CASE("Native POP allocation propagates labor availability through the live market",
 	"[economy][live-runtime][native-workforce]") {
 	for (int const already_employed : { 0, 20 }) {

@@ -76,6 +76,11 @@ Pop::Pop(
 	supporter_equivalents_by_party_policy { generate_values, pop_deps.pops_aggregate_deps.party_policy_count },
 	supporter_equivalents_by_reform { generate_values, pop_deps.pops_aggregate_deps.reform_count } {
 		reserve_needs_fulfilled_goods();
+
+if (pop_deps.enable_nutrition_health_capability) {
+(void)nutrition_health_capability.enable();
+}
+
 	}
 
 fixed_point_t Pop::get_unemployment_fraction() const {
@@ -544,12 +549,9 @@ void Pop::pop_tick_without_cleanup(
 	 * The resulting burden is history-dependent and therefore stored.
 	 * It does not directly modify population size or mortality.
 	 */
-	last_nutrition_health_burden_update = update_nutrition_health_burden(
-		nutrition_health_burden,
-		get_basic_resource_stress_response().health_vulnerability_pressure
-	);
-	nutrition_health_burden =
-		last_nutrition_health_burden_update.burden;
+	(void)nutrition_health_capability.update(
+get_basic_resource_stress_response().health_vulnerability_pressure
+);
 
 	fill_needs_fulfilled_goods_with_false();
 	

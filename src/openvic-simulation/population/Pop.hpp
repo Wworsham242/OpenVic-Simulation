@@ -185,15 +185,13 @@ namespace OpenVic {
 		 */
 		fixed_point_t survival_needs_stress_exposure = fixed_point_t::_0;
 		SurvivalNeedsStressUpdate last_survival_needs_stress_update {};
-
-		/*
-		 * History-dependent nutritional health burden.
-		 *
-		 * Unlike the derived 004A4 response, this must be stored because
-		 * it carries prior health-state information across days.
-		 */
-		fixed_point_t nutrition_health_burden = fixed_point_t::_0;
-		NutritionHealthBurdenUpdate last_nutrition_health_burden_update {};
+/*
+ * Optional history-dependent nutritional-health capability.
+ *
+ * Its absence does not alter authoritative POP size, employment,
+ * needs accounting or workforce allocation.
+ */
+OptionalNutritionHealthCapability nutrition_health_capability {};
 
 	public:
 		[[nodiscard]] fixed_point_t get_survival_needs_stress_exposure() const {
@@ -210,14 +208,18 @@ namespace OpenVic {
 				get_militancy() / fixed_point_t { 10 }
 			);
 		}
+[[nodiscard]] bool has_nutrition_health_capability() const {
+return nutrition_health_capability.is_enabled();
+}
 
-		[[nodiscard]] fixed_point_t get_nutrition_health_burden() const {
-			return nutrition_health_burden;
-		}
+[[nodiscard]] fixed_point_t get_nutrition_health_burden() const {
+return nutrition_health_capability.get_burden();
+}
 
-		[[nodiscard]] NutritionHealthBurdenUpdate const& get_last_nutrition_health_burden_update() const {
-			return last_nutrition_health_burden_update;
-		}
+[[nodiscard]] NutritionHealthBurdenUpdate const*
+get_last_nutrition_health_burden_update_nullable() const {
+return nutrition_health_capability.get_last_update_nullable();
+}
 
 	private:
 
