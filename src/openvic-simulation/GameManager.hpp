@@ -2,6 +2,7 @@
 
 #include <optional>
 #include <string_view>
+#include <vector>
 
 #include <function2/function2.hpp>
 
@@ -14,6 +15,15 @@
 #include "openvic-simulation/misc/GameRulesManager.hpp"
 
 namespace OpenVic {
+	struct NativePositionBootstrap {
+		PositionOccupancy occupancy;
+		std::vector<AuthorityGrant> grants;
+	};
+
+	struct NativeInstanceBootstrap {
+		std::optional<NativePositionBootstrap> position;
+	};
+
 	struct GameManager {
 		using elapsed_time_getter_func_t = fu2::function_base<true, true, fu2::capacity_none, false, false, uint64_t() const>;
 
@@ -75,6 +85,11 @@ namespace OpenVic {
 		/// legacy bookmark. Native scenario/bootstrap state is applied through
 		/// generalized runtime owners after this boundary.
 		bool setup_native_instance();
+
+		/// Construct the same authoritative runtime and compose requested
+		/// optional native capabilities through their existing runtime owners.
+		/// Failure to apply requested bootstrap state aborts construction.
+		bool setup_native_instance(NativeInstanceBootstrap bootstrap);
 
 		/// Legacy compatibility entry point. Constructs the same authoritative
 		/// runtime, then applies bookmark/history state.

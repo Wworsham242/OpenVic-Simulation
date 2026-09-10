@@ -3,6 +3,7 @@
 #include <chrono>
 #include <functional>
 #include <string_view>
+#include <utility>
 
 #include <range/v3/algorithm/contains.hpp>
 #include <range/v3/algorithm/find_if.hpp>
@@ -274,10 +275,16 @@ void GameManager::finalize_instance_definition_registries() {
 }
 
 bool GameManager::setup_native_instance() {
+	return setup_native_instance(NativeInstanceBootstrap {});
+}
+
+bool GameManager::setup_native_instance(NativeInstanceBootstrap bootstrap) {
 	if (instance_manager) {
 		spdlog::error_s("Trying to setup a native game instance while one is already setup!");
 		return false;
-	}	SPDLOG_INFO("Initialising native game instance.");
+	}
+
+	SPDLOG_INFO("Initialising native game instance.");
 
 	finalize_instance_definition_registries();
 
@@ -292,6 +299,19 @@ bool GameManager::setup_native_instance() {
 	if (!instance_manager->setup()) {
 		instance_manager.reset();
 		return false;
+	}
+
+	if (bootstrap.position) {
+		NativePositionBootstrap position_bootstrap = std::move(*bootstrap.position);
+
+		if (!instance_manager->bootstrap_position_occupancy(
+			std::move(position_bootstrap.occupancy),
+			std::move(position_bootstrap.grants)
+		)) {
+			spdlog::error_s("Failed to apply requested native position bootstrap.");
+			instance_manager.reset();
+			return false;
+		}
 	}
 
 	return true;
