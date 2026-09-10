@@ -732,9 +732,13 @@ preallocated_upstream_workforce = allocation;
 
     [[nodiscard]] bool bind_additional_upstream_site(
             ProductiveSiteBinding binding,
-            MapInstance& map
+            MapInstance& map,
+            ProductionType const& production_type
     ) {
-            if (!binding.resolve(map, upstream.get_production_type())) {
+            if (
+                    !production_type.is_setting_general_process() ||
+                    !binding.resolve(map, production_type)
+            ) {
                     return false;
             }
 
@@ -757,12 +761,12 @@ preallocated_upstream_workforce = allocation;
             additional_upstream_sites.push_back(
                     std::make_unique<BoundUpstreamSiteState>(
                             std::move(binding),
-                            upstream.get_production_type(),
+                            production_type,
                             scenario.upstream_utilization
                     )
             );
 
-            // The vector moves unique_ptrs, not the site objects themselves.
+            // Deterministic site ordering is independent of binding-call order.
             std::sort(
                     additional_upstream_sites.begin(),
                     additional_upstream_sites.end(),
@@ -772,6 +776,17 @@ preallocated_upstream_workforce = allocation;
             );
 
             return true;
+    }
+
+    [[nodiscard]] bool bind_additional_upstream_site(
+            ProductiveSiteBinding binding,
+            MapInstance& map
+    ) {
+            return bind_additional_upstream_site(
+                    std::move(binding),
+                    map,
+                    upstream.get_production_type()
+            );
     }
 
     [[nodiscard]] size_t get_additional_upstream_site_count() const {
@@ -804,6 +819,22 @@ preallocated_upstream_workforce = allocation;
                     : std::nullopt;
     }
 
+    [[nodiscard]] ProductionType const*
+    get_additional_upstream_production_type(size_t index) const {
+            return index < additional_upstream_sites.size()
+                    ? &additional_upstream_sites[index]->producer.get_production_type()
+                    : nullptr;
+    }
+
+    [[nodiscard]] fixed_point_t
+    get_additional_upstream_inventory(
+            size_t index,
+            GoodDefinition const& good
+    ) const {
+            return index < additional_upstream_sites.size()
+                    ? additional_upstream_sites[index]->producer.get_inventory(good)
+                    : fixed_point_t::_0;
+    }
     [[nodiscard]] std::optional<WorkforceAllocationResult>
     get_additional_upstream_previous_workforce(size_t index) const {
             return index < additional_upstream_sites.size()

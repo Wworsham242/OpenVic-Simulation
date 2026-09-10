@@ -46,6 +46,7 @@ namespace {
 		GoodDefinition const* final_good = nullptr;
 
 		std::optional<ProductionType> upstream_process;
+		std::optional<ProductionType> alternate_upstream_process;
 		std::optional<ProductionType> downstream_process;
 
 		LiveEconomyFixture(
@@ -86,6 +87,9 @@ namespace {
 			REQUIRE(intermediate != nullptr);
 			REQUIRE(final_good != nullptr);
 
+			memory::vector<Job> alternate_jobs = jobs;
+
+
 			fixed_point_map_t<GoodDefinition const*> upstream_inputs;
 			upstream_inputs.emplace(feedstock, fixed_point_t::_1);
 			if (include_secondary_feedstock) {
@@ -106,6 +110,64 @@ namespace {
 				fixed_point_map_t<GoodDefinition const*> {},
 				false, false, false
 			);
+
+			fixed_point_map_t<GoodDefinition const*> alternate_inputs;
+
+
+			alternate_inputs.emplace(
+
+
+			        feedstock,
+
+
+			        fixed_point_t { 2 }
+
+
+			);
+
+
+
+			alternate_upstream_process.emplace(
+
+
+			        rules,
+
+
+			        "live_upstream_alternate",
+
+
+			        std::nullopt,
+
+
+			        std::move(alternate_jobs),
+
+
+			        ProductionType::template_type_t::PROCESS,
+
+
+			        workforce,
+
+
+			        std::move(alternate_inputs),
+
+
+			        *intermediate,
+
+
+			        fixed_point_t::_1,
+
+
+			        memory::vector<ProductionType::bonus_t> {},
+
+
+			        fixed_point_map_t<GoodDefinition const*> {},
+
+
+			        false, false, false
+
+
+			);
+
 
 			fixed_point_map_t<GoodDefinition const*> downstream_inputs;
 			downstream_inputs.emplace(intermediate, fixed_point_t(2));
@@ -1077,7 +1139,7 @@ namespace {
 		ProductiveSiteBinding binding { "1", "plant", "live_upstream", LaborPoolScope::ProvinceLocal };
 		uint64_t clearings = 0;
 
-		BoundWorldFixture() {
+		explicit BoundWorldFixture(bool alternate_secondary_process = false) {
 			// province_building_types stores references into the building registry,
                  // so reserve before inserting multiple manually-created types.
                  population.buildings.reserve_more_building_types(2);
@@ -1094,7 +1156,10 @@ namespace {
                  secondary_args.in_province = true;
                  secondary_args.capacity_per_level = 2;
                  secondary_args.max_level = building_level_t { 5 };
-                 secondary_args.production_type = &*economy.upstream_process;
+                 secondary_args.production_type =
+                        alternate_secondary_process
+                                ? &*economy.alternate_upstream_process
+                                : &*economy.upstream_process;
 
                  REQUIRE(
                          population.buildings.add_building_type(
@@ -1725,6 +1790,192 @@ CHECK(reverse == forward);
 }
 
 
+TEST_CASE(
+"005A6 distinct PROCESS sites share authoritative production orchestration",
+"[convergence][005a6][economy][production-composition][native-workforce][conservation]"
+) {
+        BoundWorldFixture world { true };
+
+        world.plant().set_level(building_level_t { 2 });
+        world.plant_b().set_level(building_level_t { 2 });
+
+        // One authoritative 60-person province labor pool is insufficient
+        // to satisfy both 40-worker site requests independently.
+        world.replace_population("1", 60);
+
+        REQUIRE(world.economy.alternate_upstream_process.has_value());
+
+        ProductiveSiteBinding secondary {
+                "1",
+                "plant_b",
+                "live_upstream_alternate",
+                LaborPoolScope::ProvinceLocal
+        };
+
+        // This is the 005A6 seam: the additional physical site explicitly
+        // selects a different setting-general PROCESS.
+        REQUIRE(
+                world.runtime.bind_additional_upstream_site(
+                        secondary,
+                        *world.map,
+                        *world.economy.alternate_upstream_process
+                )
+        );
+
+        REQUIRE(
+                world.runtime.get_additional_upstream_site_count() == 1
+        );
+
+        ProductionType const* secondary_type =
+                world.runtime.get_additional_upstream_production_type(0);
+
+        REQUIRE(secondary_type != nullptr);
+
+        CHECK(
+                &world.runtime
+                        .get_upstream_producer_for_workforce_allocation()
+                        .get_production_type()
+                != secondary_type
+        );
+
+        CHECK(
+                secondary_type->get_identifier()
+                == "live_upstream_alternate"
+        );
+
+        CHECK(
+                secondary_type->template_type
+                == ProductionType::template_type_t::PROCESS
+        );
+
+        world.cycle();
+
+        auto provenance =
+                world.runtime.get_latest_provenance();
+
+        REQUIRE(provenance.has_value());
+        REQUIRE(provenance->workforce.has_value());
+
+        auto secondary_workforce =
+                world.runtime
+                        .get_additional_upstream_previous_workforce(0);
+
+        AggregateProductionResult const* secondary_production =
+                world.runtime
+                        .get_additional_upstream_last_production(0);
+
+        AggregateMarketCycleResult const* secondary_market =
+                world.runtime
+                        .get_additional_upstream_last_market(0);
+
+        REQUIRE(secondary_workforce.has_value());
+        REQUIRE(secondary_production != nullptr);
+        REQUIRE(secondary_market != nullptr);
+
+        // --------------------------------------------------------
+        // One employment authority.
+        // --------------------------------------------------------
+
+        CHECK(
+                provenance->workforce->allocated
+                == fixed_point_t { 40 }
+        );
+
+        CHECK(
+                secondary_workforce->allocated
+                == fixed_point_t { 20 }
+        );
+
+        CHECK(
+                provenance->workforce->allocated +
+                secondary_workforce->allocated
+                == fixed_point_t { 60 }
+        );
+
+        CHECK(
+                world.province("1")
+                        .get_mutable_pops()
+                        .begin()
+                        ->get_unemployed()
+                == pop_size_t { 0 }
+        );
+
+        // --------------------------------------------------------
+        // Distinct physical recipes.
+        //
+        // Primary PROCESS:
+        //      1 feedstock -> 1 intermediate
+        //
+        // Secondary PROCESS:
+        //      2 feedstock -> 1 intermediate
+        //
+        // The shared source supplies only four feedstock units.
+        // Physical consumption must therefore satisfy this identity
+        // rather than treating the two recipes as interchangeable.
+        // --------------------------------------------------------
+
+        fixed_point_t const primary_output =
+                provenance->upstream.actual_output;
+
+        fixed_point_t const secondary_output =
+                secondary_production->actual_output;
+
+        CHECK(primary_output > fixed_point_t::_0);
+        CHECK(secondary_output > fixed_point_t::_0);
+
+        fixed_point_t const feedstock_implied_by_output =
+                primary_output +
+                secondary_output * fixed_point_t { 2 };
+
+        CHECK(
+                feedstock_implied_by_output
+                == world.scenario.source_inflow_per_daily_tick
+        );
+
+        // All allocated feedstock is consumed by the two successful
+        // transformations; no parallel inventory received a duplicate copy.
+        CHECK(
+                world.runtime
+                        .get_upstream_producer_for_workforce_allocation()
+                        .get_inventory(*world.economy.feedstock)
+                == fixed_point_t::_0
+        );
+
+        CHECK(
+                world.runtime.get_additional_upstream_inventory(
+                        0,
+                        *world.economy.feedstock
+                )
+                == fixed_point_t::_0
+        );
+
+        // --------------------------------------------------------
+        // One existing GoodMarket clearing.
+        // --------------------------------------------------------
+
+        CHECK(
+                provenance->upstream_market.output_sold
+                == primary_output
+        );
+
+        CHECK(
+                secondary_market->output_sold
+                == secondary_output
+        );
+
+        CHECK(
+                provenance->upstream_market.output_sold +
+                secondary_market->output_sold
+                == primary_output + secondary_output
+        );
+
+        CHECK(
+                world.runtime.get_status().upstream_output
+                == primary_output + secondary_output
+        );
+
+        CHECK(world.clearings == 1);
+}
 TEST_CASE(
 "Real bound productive sites share one province workforce and market deterministically",
 "[economy][productive-site][world][multi-site][employment-authority][determinism]"
