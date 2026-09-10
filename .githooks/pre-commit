@@ -1,0 +1,14 @@
+#!/bin/sh
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass \
+  -File scripts/Verify-Research-Gate.ps1 -Staged
+
+status=$?
+
+if [ $status -ne 0 ]; then
+    echo ""
+    echo "Commit blocked by Wargame research gate."
+    exit $status
+fi
+
+exit 0
