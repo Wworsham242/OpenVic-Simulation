@@ -2,6 +2,7 @@
 
 #include <string_view>
 
+#include "openvic-simulation/core/memory/String.hpp"
 #include "openvic-simulation/core/memory/Vector.hpp"
 #include "openvic-simulation/military/MilitaryFormation.hpp"
 #include "openvic-simulation/types/UniqueId.hpp"
@@ -11,6 +12,8 @@
 namespace OpenVic {
 
 struct MilitaryFormationInstance {
+    friend struct MilitaryFormationInstanceManager;
+
 private:
     memory::string PROPERTY(name);
 
@@ -18,6 +21,20 @@ private:
         formation_definition;
 
     fixed_point_t PROPERTY(readiness);
+
+    /*
+     * Current operational placement.
+     *
+     * direct_position_id references an existing canonical
+     * location identity. It does not duplicate spatial state.
+     *
+     * hosted_by_unique_id identifies another runtime military
+     * formation instance whose effective position is inherited.
+     *
+     * Zero means no host.
+     */
+    memory::string direct_position_id;
+    unique_id_t hosted_by_unique_id = 0;
 
 public:
     const unique_id_t unique_id;
@@ -55,6 +72,28 @@ public:
             has_capability(capability);
     }
 
+    [[nodiscard]]
+    bool has_direct_position() const {
+        return !direct_position_id.empty();
+    }
+
+    [[nodiscard]]
+    std::string_view
+    get_direct_position_id() const {
+        return direct_position_id;
+    }
+
+    [[nodiscard]]
+    bool is_hosted() const {
+        return hosted_by_unique_id != 0;
+    }
+
+    [[nodiscard]]
+    unique_id_t
+    get_host_unique_id() const {
+        return hosted_by_unique_id;
+    }
+
     bool set_readiness(
         fixed_point_t new_readiness
     );
@@ -77,6 +116,12 @@ private:
     > PROPERTY_REF(military_formation_instances);
 
     unique_id_t next_unique_id = 1;
+
+    [[nodiscard]]
+    bool would_create_host_cycle(
+        unique_id_t guest_unique_id,
+        unique_id_t proposed_host_unique_id
+    ) const;
 
 public:
     bool create_military_formation_instance(
@@ -103,6 +148,33 @@ public:
     get_military_formation_instance_count() const {
         return military_formation_instances.size();
     }
+
+    /*
+     * Direct placement and hosting are alternative representations
+     * of current operational position.
+     *
+     * Setting a direct position detaches the instance from any host.
+     * Hosting an instance clears its direct position.
+     */
+    bool set_direct_operational_position(
+        unique_id_t formation_unique_id,
+        std::string_view position_id
+    );
+
+    bool host_formation(
+        unique_id_t guest_unique_id,
+        unique_id_t host_unique_id
+    );
+
+    bool detach_formation(
+        unique_id_t guest_unique_id
+    );
+
+    [[nodiscard]]
+    std::string_view
+    get_effective_operational_position_id(
+        unique_id_t formation_unique_id
+    ) const;
 };
 
 }

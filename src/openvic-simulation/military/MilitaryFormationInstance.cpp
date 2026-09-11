@@ -142,3 +142,207 @@ get_military_formation_instance_by_unique_id(
 
     return &*it;
 }
+
+bool MilitaryFormationInstanceManager::
+set_direct_operational_position(
+    unique_id_t formation_unique_id,
+    std::string_view position_id
+) {
+    if (position_id.empty()) {
+        spdlog::error_s(
+            "Cannot directly place military "
+            "formation instance {} at an empty "
+            "position identifier.",
+            formation_unique_id
+        );
+
+        return false;
+    }
+
+    MilitaryFormationInstance* const formation =
+        get_military_formation_instance_by_unique_id(
+            formation_unique_id
+        );
+
+    if (formation == nullptr) {
+        spdlog::error_s(
+            "Cannot place unknown military "
+            "formation instance {}.",
+            formation_unique_id
+        );
+
+        return false;
+    }
+
+    formation->hosted_by_unique_id = 0;
+    formation->direct_position_id = position_id;
+
+    return true;
+}
+
+bool MilitaryFormationInstanceManager::
+would_create_host_cycle(
+    unique_id_t guest_unique_id,
+    unique_id_t proposed_host_unique_id
+) const {
+    unique_id_t current =
+        proposed_host_unique_id;
+
+    size_t remaining =
+        military_formation_instances.size();
+
+    while (
+        current != 0 &&
+        remaining > 0
+    ) {
+        if (current == guest_unique_id) {
+            return true;
+        }
+
+        MilitaryFormationInstance const*
+            const instance =
+                get_military_formation_instance_by_unique_id(
+                    current
+                );
+
+        if (instance == nullptr) {
+            return false;
+        }
+
+        current =
+            instance->hosted_by_unique_id;
+
+        --remaining;
+    }
+
+    /*
+     * Exhausting the maximum possible chain length while still
+     * having a host means pre-existing corrupted cyclic state.
+     * Reject the mutation rather than extending it.
+     */
+    return current != 0;
+}
+
+bool MilitaryFormationInstanceManager::
+host_formation(
+    unique_id_t guest_unique_id,
+    unique_id_t host_unique_id
+) {
+    if (guest_unique_id == host_unique_id) {
+        spdlog::error_s(
+            "Military formation instance {} "
+            "cannot host itself.",
+            guest_unique_id
+        );
+
+        return false;
+    }
+
+    MilitaryFormationInstance* const guest =
+        get_military_formation_instance_by_unique_id(
+            guest_unique_id
+        );
+
+    MilitaryFormationInstance const* const host =
+        get_military_formation_instance_by_unique_id(
+            host_unique_id
+        );
+
+    if (
+        guest == nullptr ||
+        host == nullptr
+    ) {
+        spdlog::error_s(
+            "Cannot create military hosting "
+            "relationship guest={} host={} because "
+            "one or both instances do not exist.",
+            guest_unique_id,
+            host_unique_id
+        );
+
+        return false;
+    }
+
+    if (
+        would_create_host_cycle(
+            guest_unique_id,
+            host_unique_id
+        )
+    ) {
+        spdlog::error_s(
+            "Military hosting relationship "
+            "guest={} host={} would create a cycle.",
+            guest_unique_id,
+            host_unique_id
+        );
+
+        return false;
+    }
+
+    guest->direct_position_id.clear();
+    guest->hosted_by_unique_id =
+        host->unique_id;
+
+    return true;
+}
+
+bool MilitaryFormationInstanceManager::
+detach_formation(
+    unique_id_t guest_unique_id
+) {
+    MilitaryFormationInstance* const guest =
+        get_military_formation_instance_by_unique_id(
+            guest_unique_id
+        );
+
+    if (guest == nullptr) {
+        spdlog::error_s(
+            "Cannot detach unknown military "
+            "formation instance {}.",
+            guest_unique_id
+        );
+
+        return false;
+    }
+
+    guest->hosted_by_unique_id = 0;
+
+    return true;
+}
+
+std::string_view
+MilitaryFormationInstanceManager::
+get_effective_operational_position_id(
+    unique_id_t formation_unique_id
+) const {
+    MilitaryFormationInstance const* current =
+        get_military_formation_instance_by_unique_id(
+            formation_unique_id
+        );
+
+    size_t remaining =
+        military_formation_instances.size();
+
+    while (
+        current != nullptr &&
+        remaining > 0
+    ) {
+        if (current->has_direct_position()) {
+            return
+                current->get_direct_position_id();
+        }
+
+        if (!current->is_hosted()) {
+            return {};
+        }
+
+        current =
+            get_military_formation_instance_by_unique_id(
+                current->get_host_unique_id()
+            );
+
+        --remaining;
+    }
+
+    return {};
+}
