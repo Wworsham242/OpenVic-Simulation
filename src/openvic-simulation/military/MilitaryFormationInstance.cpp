@@ -279,6 +279,99 @@ host_formation(
         return false;
     }
 
+    /*
+     * Hosting contracts are optional.
+     *
+     * If the guest declares no requirements, the generic 005A11
+     * hosting behavior remains available.
+     *
+     * Once a guest declares requirements, every requirement must
+     * be supplied by the proposed host with sufficient remaining
+     * capacity.
+     */
+    auto const requirements =
+        guest->
+            get_formation_definition().
+            get_hosting_requirements();
+
+    for (
+        MilitaryHostingRequirement const&
+            requirement :
+        requirements
+    ) {
+        MilitaryHostingProvision const*
+            const provision =
+                host->
+                    get_formation_definition().
+                    get_hosting_provision(
+                        requirement.profile.get()
+                    );
+
+        if (provision == nullptr) {
+            spdlog::error_s(
+                "Military formation instance {} "
+                "cannot host {} because required "
+                "hosting profile {} is unavailable.",
+                host_unique_id,
+                guest_unique_id,
+                requirement.profile.get()
+            );
+
+            return false;
+        }
+
+        fixed_point_t used_capacity = 0;
+
+        for (
+            MilitaryFormationInstance const&
+                existing_guest :
+            military_formation_instances
+        ) {
+            if (
+                existing_guest.unique_id ==
+                    guest_unique_id ||
+                existing_guest.
+                    hosted_by_unique_id !=
+                    host_unique_id
+            ) {
+                continue;
+            }
+
+            MilitaryHostingRequirement const*
+                const existing_requirement =
+                    existing_guest.
+                        get_formation_definition().
+                        get_hosting_requirement(
+                            requirement.profile.get()
+                        );
+
+            if (
+                existing_requirement != nullptr
+            ) {
+                used_capacity +=
+                    existing_requirement->demand;
+            }
+        }
+
+        if (
+            used_capacity +
+                requirement.demand >
+            provision->capacity
+        ) {
+            spdlog::error_s(
+                "Military formation instance {} "
+                "has insufficient remaining "
+                "capacity for hosting profile {} "
+                "when attempting to host {}.",
+                host_unique_id,
+                requirement.profile.get(),
+                guest_unique_id
+            );
+
+            return false;
+        }
+    }
+
     guest->direct_position_id.clear();
     guest->hosted_by_unique_id =
         host->unique_id;
