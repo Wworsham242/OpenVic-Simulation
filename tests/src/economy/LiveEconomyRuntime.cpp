@@ -4690,3 +4690,278 @@ TEST_CASE(
 
     CHECK(lower_cost.runtime.get_status().upstream_output > higher_cost.runtime.get_status().upstream_output);
 }
+
+TEST_CASE(
+    "005A7 restricted calculation evaluates explicit fixed-point inputs deterministically",
+    "[convergence][005a7][restricted-calculation][determinism]"
+) {
+    RestrictedCalculationDefinition formula {
+        2,
+        memory::vector<RestrictedCalculationInstruction> {
+            {
+                .operation =
+                    RestrictedCalculationOperation::PUSH_INPUT,
+                .input_index = 0
+            },
+            {
+                .operation =
+                    RestrictedCalculationOperation::PUSH_INPUT,
+                .input_index = 1
+            },
+            {
+                .operation =
+                    RestrictedCalculationOperation::MULTIPLY
+            },
+            {
+                .operation =
+                    RestrictedCalculationOperation::PUSH_CONSTANT,
+                .constant = fixed_point_t::_0_10
+            },
+            {
+                .operation =
+                    RestrictedCalculationOperation::ADD
+            }
+        }
+    };
+
+    REQUIRE(formula.is_valid());
+
+    std::array<fixed_point_t, 2> const inputs {
+        fixed_point_t::_1 / fixed_point_t { 2 },
+        fixed_point_t::_1 / fixed_point_t { 2 }
+    };
+
+    auto first = formula.evaluate(inputs);
+    auto second = formula.evaluate(inputs);
+
+    REQUIRE(first.has_value());
+    REQUIRE(second.has_value());
+
+    CHECK(*first == *second);
+
+    CHECK(
+        *first ==
+        fixed_point_t { 35 } /
+        fixed_point_t { 100 }
+    );
+}
+
+TEST_CASE(
+    "005A7 restricted calculation rejects invalid operations",
+    "[convergence][005a7][restricted-calculation][validation]"
+) {
+    RestrictedCalculationDefinition invalid_formula {
+        1,
+        memory::vector<RestrictedCalculationInstruction> {
+            {
+                .operation =
+                    static_cast<RestrictedCalculationOperation>(255)
+            }
+        }
+    };
+
+    CHECK_FALSE(invalid_formula.is_valid());
+
+    std::array<fixed_point_t, 1> const inputs {
+        fixed_point_t::_1
+    };
+
+    CHECK_FALSE(
+        invalid_formula.evaluate(inputs).has_value()
+    );
+}
+
+TEST_CASE(
+    "005A7 utilization formula changes only bounded calculation output",
+    "[convergence][005a7][restricted-calculation][utilization]"
+) {
+    ProductiveSiteUtilizationDecisionPolicy native_policy {
+        .minimum_utilization = fixed_point_t::_0_10,
+        .maximum_utilization = fixed_point_t::_1,
+        .adjustment_rate = fixed_point_t::_1,
+        .surplus_for_full_response = fixed_point_t { 100 },
+        .profitability_weight =
+            fixed_point_t::_1 / fixed_point_t { 2 }
+    };
+
+    ProductiveSiteUtilizationDecisionPolicy formula_policy =
+        native_policy;
+
+    formula_policy.profitability_pressure_formula =
+        RestrictedCalculationDefinition {
+            2,
+            memory::vector<RestrictedCalculationInstruction> {
+                {
+                    .operation =
+                        RestrictedCalculationOperation::PUSH_INPUT,
+                    .input_index = 0
+                },
+                {
+                    .operation =
+                        RestrictedCalculationOperation::PUSH_CONSTANT,
+                    .constant = fixed_point_t::_1
+                },
+                {
+                    .operation =
+                        RestrictedCalculationOperation::MULTIPLY
+                }
+            }
+        };
+
+    REQUIRE(native_policy.is_valid());
+    REQUIRE(formula_policy.is_valid());
+
+    ProductiveSiteUtilizationDecisionInput const input {
+        .prior_utilization =
+            fixed_point_t::_1 / fixed_point_t { 2 },
+        .operating_surplus =
+            fixed_point_t { 50 }
+    };
+
+    auto native =
+        ProductiveSiteUtilizationDecision::calculate(
+            input,
+            native_policy
+        );
+
+    auto formula =
+        ProductiveSiteUtilizationDecision::calculate(
+            input,
+            formula_policy
+        );
+
+    CHECK(
+        native.profitability_pressure ==
+        fixed_point_t::_1 / fixed_point_t { 4 }
+    );
+
+    CHECK(
+        formula.profitability_pressure ==
+        fixed_point_t::_1 / fixed_point_t { 2 }
+    );
+
+    CHECK(
+        formula.next_utilization ==
+        fixed_point_t::_1
+    );
+
+    CHECK(
+        formula.next_utilization >=
+        formula_policy.minimum_utilization
+    );
+
+    CHECK(
+        formula.next_utilization <=
+        formula_policy.maximum_utilization
+    );
+}
+
+TEST_CASE(
+    "005A7 equivalent formula preserves native utilization behavior",
+    "[convergence][005a7][restricted-calculation][parity]"
+) {
+    ProductiveSiteUtilizationDecisionPolicy native_policy {
+        .minimum_utilization = fixed_point_t::_0_10,
+        .maximum_utilization = fixed_point_t::_1,
+        .adjustment_rate = fixed_point_t::_1,
+        .surplus_for_full_response = fixed_point_t { 100 },
+        .profitability_weight =
+            fixed_point_t::_1 / fixed_point_t { 2 }
+    };
+
+    ProductiveSiteUtilizationDecisionPolicy formula_policy =
+        native_policy;
+
+    formula_policy.profitability_pressure_formula =
+        RestrictedCalculationDefinition {
+            2,
+            memory::vector<RestrictedCalculationInstruction> {
+                {
+                    .operation =
+                        RestrictedCalculationOperation::PUSH_INPUT,
+                    .input_index = 0
+                },
+                {
+                    .operation =
+                        RestrictedCalculationOperation::PUSH_INPUT,
+                    .input_index = 1
+                },
+                {
+                    .operation =
+                        RestrictedCalculationOperation::MULTIPLY
+                }
+            }
+        };
+
+    ProductiveSiteUtilizationDecisionInput const input {
+        .prior_utilization =
+            fixed_point_t::_1 / fixed_point_t { 2 },
+        .operating_surplus =
+            fixed_point_t { 50 }
+    };
+
+    CHECK(
+        ProductiveSiteUtilizationDecision::calculate(
+            input,
+            native_policy
+        ) ==
+        ProductiveSiteUtilizationDecision::calculate(
+            input,
+            formula_policy
+        )
+    );
+}
+
+TEST_CASE(
+    "005A7 invalid formula configuration does not mutate authoritative utilization",
+    "[convergence][005a7][restricted-calculation][authority]"
+) {
+    BoundWorldFixture world;
+
+    fixed_point_t const initial =
+        fixed_point_t::_1 / fixed_point_t { 2 };
+
+    REQUIRE(
+        world.runtime.set_upstream_site_utilization(
+            "site:1:plant",
+            initial
+        )
+    );
+
+    ProductiveSiteUtilizationDecisionPolicy invalid_policy {
+        .minimum_utilization = fixed_point_t::_0,
+        .maximum_utilization = fixed_point_t::_1,
+        .adjustment_rate = fixed_point_t::_1,
+        .surplus_for_full_response = fixed_point_t { 100 },
+        .profitability_weight =
+            fixed_point_t::_1 / fixed_point_t { 2 }
+    };
+
+    invalid_policy.profitability_pressure_formula =
+        RestrictedCalculationDefinition {
+            2,
+            memory::vector<RestrictedCalculationInstruction> {
+                {
+                    .operation =
+                        RestrictedCalculationOperation::ADD
+                }
+            }
+        };
+
+    REQUIRE_FALSE(invalid_policy.is_valid());
+
+    CHECK_FALSE(
+        world.runtime.configure_upstream_site_utilization_decision(
+            "site:1:plant",
+            invalid_policy
+        )
+    );
+
+    auto after =
+        world.runtime.get_upstream_site_utilization(
+            "site:1:plant"
+        );
+
+    REQUIRE(after.has_value());
+    CHECK(*after == initial);
+}

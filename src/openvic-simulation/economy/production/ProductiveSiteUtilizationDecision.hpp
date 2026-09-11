@@ -1,7 +1,10 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
+#include <optional>
 
+#include "openvic-simulation/scripts/RestrictedCalculation.hpp"
 #include "openvic-simulation/types/fixed_point/FixedPoint.hpp"
 
 namespace OpenVic {
@@ -13,6 +16,9 @@ struct ProductiveSiteUtilizationDecisionPolicy final {
     fixed_point_t surplus_for_full_response = fixed_point_t { 100 };
     fixed_point_t profitability_weight = fixed_point_t::_0_25;
 
+    std::optional<RestrictedCalculationDefinition>
+        profitability_pressure_formula;
+
     [[nodiscard]] bool is_valid() const {
         return
             minimum_utilization >= fixed_point_t::_0 &&
@@ -22,7 +28,14 @@ struct ProductiveSiteUtilizationDecisionPolicy final {
             adjustment_rate <= fixed_point_t::_1 &&
             surplus_for_full_response > fixed_point_t::_0 &&
             profitability_weight >= fixed_point_t::_0 &&
-            profitability_weight <= fixed_point_t::_1;
+            profitability_weight <= fixed_point_t::_1 &&
+            (
+                !profitability_pressure_formula.has_value() ||
+                (
+                    profitability_pressure_formula->is_valid() &&
+                    profitability_pressure_formula->get_input_count() == 2
+                )
+            );
     }
 
     bool operator==(ProductiveSiteUtilizationDecisionPolicy const&) const = default;
@@ -61,8 +74,26 @@ public:
             fixed_point_t::_1
         );
 
-        fixed_point_t const profitability_pressure =
+        fixed_point_t profitability_pressure =
             normalized_signal * policy.profitability_weight;
+
+        if (policy.profitability_pressure_formula.has_value()) {
+            std::array<fixed_point_t, 2> const formula_inputs {
+                normalized_signal,
+                policy.profitability_weight
+            };
+
+            auto const formula_result =
+                policy.profitability_pressure_formula->evaluate(
+                    formula_inputs
+                );
+
+            if (!formula_result.has_value()) {
+                return {};
+            }
+
+            profitability_pressure = *formula_result;
+        }
 
         fixed_point_t const unconstrained_target =
             prior + profitability_pressure;
