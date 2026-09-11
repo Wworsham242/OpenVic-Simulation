@@ -439,3 +439,140 @@ get_effective_operational_position_id(
 
     return {};
 }
+
+bool MilitaryFormationInstance::
+has_support_relationship(
+    MilitarySupportTypeDefinition const&
+        support_type,
+    std::string_view target_id
+) const {
+    return std::ranges::any_of(
+        support_relationships,
+        [&support_type, target_id](
+            MilitarySupportRelationship const&
+                relationship
+        ) {
+            return
+                &relationship.support_type.get() ==
+                    &support_type &&
+                relationship.target_id ==
+                    target_id;
+        }
+    );
+}
+
+bool MilitaryFormationInstanceManager::
+add_support_relationship(
+    unique_id_t formation_unique_id,
+    MilitarySupportTypeDefinition const&
+        support_type,
+    std::string_view target_id
+) {
+    if (target_id.empty()) {
+        spdlog::error_s(
+            "Cannot add military support "
+            "relationship with empty target ID."
+        );
+
+        return false;
+    }
+
+    MilitaryFormationInstance* const formation =
+        get_military_formation_instance_by_unique_id(
+            formation_unique_id
+        );
+
+    if (formation == nullptr) {
+        spdlog::error_s(
+            "Cannot add support relationship "
+            "to unknown military formation {}.",
+            formation_unique_id
+        );
+
+        return false;
+    }
+
+    if (
+        formation->has_support_relationship(
+            support_type,
+            target_id
+        )
+    ) {
+        spdlog::error_s(
+            "Military formation {} already has "
+            "support relationship {} -> {}.",
+            formation_unique_id,
+            support_type,
+            target_id
+        );
+
+        return false;
+    }
+
+    formation->support_relationships.push_back(
+        MilitarySupportRelationship {
+            .support_type = support_type,
+            .target_id = memory::string {
+                target_id
+            }
+        }
+    );
+
+    return true;
+}
+
+bool MilitaryFormationInstanceManager::
+remove_support_relationship(
+    unique_id_t formation_unique_id,
+    MilitarySupportTypeDefinition const&
+        support_type,
+    std::string_view target_id
+) {
+    MilitaryFormationInstance* const formation =
+        get_military_formation_instance_by_unique_id(
+            formation_unique_id
+        );
+
+    if (formation == nullptr) {
+        spdlog::error_s(
+            "Cannot remove support relationship "
+            "from unknown military formation {}.",
+            formation_unique_id
+        );
+
+        return false;
+    }
+
+    auto const it = std::ranges::find_if(
+        formation->support_relationships,
+        [&support_type, target_id](
+            MilitarySupportRelationship const&
+                relationship
+        ) {
+            return
+                &relationship.support_type.get() ==
+                    &support_type &&
+                relationship.target_id ==
+                    target_id;
+        }
+    );
+
+    if (
+        it ==
+        formation->support_relationships.end()
+    ) {
+        spdlog::error_s(
+            "Military formation {} does not have "
+            "support relationship {} -> {}.",
+            formation_unique_id,
+            support_type,
+            target_id
+        );
+
+        return false;
+    }
+
+    formation->support_relationships.erase(it);
+
+    return true;
+}

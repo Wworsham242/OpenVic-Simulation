@@ -5,6 +5,7 @@
 #include "openvic-simulation/military/MilitaryDomain.hpp"
 #include "openvic-simulation/military/MilitaryFormation.hpp"
 #include "openvic-simulation/military/MilitaryFormationInstance.hpp"
+#include "openvic-simulation/military/MilitarySupport.hpp"
 #include "openvic-simulation/military/UnitType.hpp"
 #include "openvic-simulation/military/Wargoal.hpp"
 
@@ -14,6 +15,7 @@ namespace OpenVic {
 		MilitaryDomainManager PROPERTY_REF(military_domain_manager);
 		MilitaryFormationManager PROPERTY_REF(military_formation_manager);
 		MilitaryFormationInstanceManager PROPERTY_REF(military_formation_instance_manager);
+MilitarySupportManager PROPERTY_REF(military_support_manager);
 		UnitTypeManager PROPERTY_REF(unit_type_manager);
 		LeaderTraitManager PROPERTY_REF(leader_trait_manager);
 		DeploymentManager PROPERTY_REF(deployment_manager);

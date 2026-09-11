@@ -5,11 +5,20 @@
 #include "openvic-simulation/core/memory/String.hpp"
 #include "openvic-simulation/core/memory/Vector.hpp"
 #include "openvic-simulation/military/MilitaryFormation.hpp"
+#include "openvic-simulation/military/MilitarySupport.hpp"
 #include "openvic-simulation/types/UniqueId.hpp"
 #include "openvic-simulation/types/fixed_point/FixedPoint.hpp"
 #include "openvic-simulation/utility/Getters.hpp"
 
 namespace OpenVic {
+
+struct MilitarySupportRelationship {
+    std::reference_wrapper<
+        MilitarySupportTypeDefinition const
+    > support_type;
+
+    memory::string target_id;
+};
 
 struct MilitaryFormationInstance {
     friend struct MilitaryFormationInstanceManager;
@@ -35,6 +44,17 @@ private:
      */
     memory::string direct_position_id;
     unique_id_t hosted_by_unique_id = 0;
+
+    /*
+     * Persistent support relationships are independent from
+     * operational placement and hosting.
+     *
+     * A formation may have zero, one, or many concurrent support
+     * relationships.
+     */
+    memory::vector<
+        MilitarySupportRelationship
+    > support_relationships;
 
 public:
     const unique_id_t unique_id;
@@ -93,6 +113,21 @@ public:
     get_host_unique_id() const {
         return hosted_by_unique_id;
     }
+
+    [[nodiscard]]
+    std::span<
+        MilitarySupportRelationship const
+    >
+    get_support_relationships() const {
+        return support_relationships;
+    }
+
+    [[nodiscard]]
+    bool has_support_relationship(
+        MilitarySupportTypeDefinition const&
+            support_type,
+        std::string_view target_id
+    ) const;
 
     bool set_readiness(
         fixed_point_t new_readiness
@@ -168,6 +203,20 @@ public:
 
     bool detach_formation(
         unique_id_t guest_unique_id
+    );
+
+    bool add_support_relationship(
+        unique_id_t formation_unique_id,
+        MilitarySupportTypeDefinition const&
+            support_type,
+        std::string_view target_id
+    );
+
+    bool remove_support_relationship(
+        unique_id_t formation_unique_id,
+        MilitarySupportTypeDefinition const&
+            support_type,
+        std::string_view target_id
     );
 
     [[nodiscard]]
