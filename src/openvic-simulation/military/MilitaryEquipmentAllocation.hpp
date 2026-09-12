@@ -117,6 +117,31 @@ struct MilitaryEquipmentAllocator final {
         >;
 
     /*
+     * Derives how much of a declared requirement should actually
+     * enter this allocation pass.
+     *
+     * The provider receives:
+     *
+     * formation ID,
+     * item ID,
+     * declared requirement.
+     *
+     * It must return a quantity in [0, declared requirement].
+     *
+     * This is intentionally generic. Persistent assignment may use
+     * it to request only a shortfall. Future logistics/command
+     * mechanics may derive executable demand before physical draw.
+     */
+    using request_quantity_provider_t =
+        std::function<
+            fixed_point_t(
+                unique_id_t,
+                std::string_view,
+                fixed_point_t
+            )
+        >;
+
+    /*
      * Compatibility overload.
      *
      * All formations receive priority zero, preserving the 005A18
@@ -144,6 +169,24 @@ struct MilitaryEquipmentAllocator final {
         std::span<
             MilitaryEquipmentAllocationRequest const
         > requests,
+        draw_provider_t const& draw_provider,
+        MilitaryEquipmentAllocationResult& result
+    );
+
+    /*
+     * Allocation with externally derived executable request
+     * quantities.
+     *
+     * Priority/order mechanics remain identical.
+     */
+    static bool allocate_with_quantity_provider(
+        MilitaryFormationInstanceManager const&
+            formation_manager,
+        std::span<
+            MilitaryEquipmentAllocationRequest const
+        > requests,
+        request_quantity_provider_t const&
+            request_quantity_provider,
         draw_provider_t const& draw_provider,
         MilitaryEquipmentAllocationResult& result
     );

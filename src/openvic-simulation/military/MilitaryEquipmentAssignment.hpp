@@ -104,6 +104,24 @@ public:
     );
 
     /*
+     * Allocate only the outstanding requirement after persistent
+     * assignment is considered.
+     *
+     * Existing assignments remain in place and therefore are not
+     * redrawn from external stock.
+     */
+    bool allocate_replenishment(
+        MilitaryFormationInstanceManager const&
+            formation_manager,
+        std::span<
+            MilitaryEquipmentAllocationRequest const
+        > requests,
+        MilitaryEquipmentAllocator::draw_provider_t const&
+            draw_provider,
+        MilitaryEquipmentAllocationResult& result
+    ) const;
+
+    /*
      * Return committed equipment to an external stock authority.
      *
      * Persistent assignment is reduced only after the external

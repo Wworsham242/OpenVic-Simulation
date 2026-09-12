@@ -280,6 +280,43 @@ apply_allocation_result(
 
 bool
 MilitaryEquipmentAssignmentState::
+allocate_replenishment(
+    MilitaryFormationInstanceManager const&
+        formation_manager,
+    std::span<
+        MilitaryEquipmentAllocationRequest const
+    > requests,
+    MilitaryEquipmentAllocator::draw_provider_t const&
+        draw_provider,
+    MilitaryEquipmentAllocationResult& result
+) const {
+    return
+        MilitaryEquipmentAllocator::
+            allocate_with_quantity_provider(
+                formation_manager,
+                requests,
+                [
+                    this,
+                    &formation_manager
+                ](
+                    unique_id_t formation_unique_id,
+                    std::string_view item_id,
+                    fixed_point_t
+                ) {
+                    return
+                        get_outstanding_requirement(
+                            formation_manager,
+                            formation_unique_id,
+                            item_id
+                        );
+                },
+                draw_provider,
+                result
+            );
+}
+
+bool
+MilitaryEquipmentAssignmentState::
 release(
     unique_id_t formation_unique_id,
     std::string_view item_id,
