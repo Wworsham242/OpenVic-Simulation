@@ -41,6 +41,16 @@ private:
     fixed_point_t PROPERTY(sustainment);
 
     /*
+     * Authoritative aggregate equipment condition.
+     *
+     * This is a bounded formation-level readiness input, not an
+     * equipment inventory or maintenance ledger.
+     *
+     * Detailed equipment composition remains a later mechanism.
+     */
+    fixed_point_t PROPERTY(equipment_condition);
+
+    /*
      * Current operational placement.
      *
      * direct_position_id references an existing canonical
@@ -140,6 +150,10 @@ public:
 
     bool set_readiness(
         fixed_point_t new_readiness
+    );
+
+    bool set_equipment_condition(
+        fixed_point_t new_equipment_condition
     );
 
     void set_name(

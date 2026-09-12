@@ -20,6 +20,7 @@ MilitaryFormationInstance(
     },
     readiness { new_readiness },
     sustainment { fixed_point_t::_1 },
+    equipment_condition { fixed_point_t::_1 },
     unique_id { new_unique_id } {}
 
 bool MilitaryFormationInstance::set_readiness(
@@ -39,6 +40,30 @@ bool MilitaryFormationInstance::set_readiness(
     }
 
     readiness = new_readiness;
+    return true;
+}
+
+bool MilitaryFormationInstance::
+set_equipment_condition(
+    fixed_point_t new_equipment_condition
+) {
+    if (
+        new_equipment_condition < 0 ||
+        new_equipment_condition > 1
+    ) {
+        spdlog::error_s(
+            "Military formation instance {} "
+            "equipment condition must be between "
+            "0 and 1.",
+            unique_id
+        );
+
+        return false;
+    }
+
+    equipment_condition =
+        new_equipment_condition;
+
     return true;
 }
 
@@ -746,11 +771,19 @@ adjust_readiness_toward(
      * Other mechanisms may request a lower readiness target. That
      * lower target remains authoritative for this transition.
      */
-    fixed_point_t const effective_target =
+    fixed_point_t effective_target =
         desired_readiness <
             formation->sustainment
         ? desired_readiness
         : formation->sustainment;
+
+    if (
+        formation->equipment_condition <
+        effective_target
+    ) {
+        effective_target =
+            formation->equipment_condition;
+    }
 
     if (
         formation->readiness ==
