@@ -7,6 +7,7 @@
 #include "openvic-simulation/core/memory/String.hpp"
 #include "openvic-simulation/core/memory/Vector.hpp"
 #include "openvic-simulation/military/MilitaryEquipmentAllocation.hpp"
+#include "openvic-simulation/military/MilitaryEquipmentDelivery.hpp"
 #include "openvic-simulation/military/MilitaryFormationInstance.hpp"
 #include "openvic-simulation/types/UniqueId.hpp"
 #include "openvic-simulation/types/fixed_point/FixedPoint.hpp"
@@ -119,6 +120,42 @@ public:
         MilitaryEquipmentAllocator::draw_provider_t const&
             draw_provider,
         MilitaryEquipmentAllocationResult& result
+    ) const;
+
+    using delivery_endpoint_provider_t =
+        std::function<
+            std::optional<
+                MilitaryEquipmentDeliveryEndpoint
+            >(
+                unique_id_t,
+                std::string_view
+            )
+        >;
+
+    /*
+     * Replenishment resolved through the existing generic strategic
+     * logistics network.
+     *
+     * Persistent assignment determines real shortfall.
+     * External geography/logistics state supplies endpoints.
+     * LogisticsGraph determines physically deliverable quantity.
+     * Only that quantity reaches the external stock draw.
+     */
+    bool allocate_network_replenishment(
+        MilitaryFormationInstanceManager const&
+            formation_manager,
+        std::span<
+            MilitaryEquipmentAllocationRequest const
+        > requests,
+        LogisticsGraph const& logistics_graph,
+        delivery_endpoint_provider_t const&
+            endpoint_provider,
+        MilitaryEquipmentAllocator::draw_provider_t const&
+            draw_provider,
+        MilitaryEquipmentAllocationResult&
+            allocation_result,
+        MilitaryEquipmentDeliveryResult&
+            delivery_result
     ) const;
 
     /*

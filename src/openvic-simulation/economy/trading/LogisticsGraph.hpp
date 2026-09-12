@@ -234,49 +234,76 @@ public:
 				continue;
 			}
 
-			fixed_point_t limiting_fraction = fixed_point_t::_1;
+			fixed_point_t limiting_allocation =
+allocation.requested;
 
-			for (std::string const& edge_id : allocation.path.edge_ids) {
-				fixed_point_t total_edge_request = 0;
+/*
+ * Compute the physical quantity permitted by each
+ * shared edge directly.
+ *
+ * Multiplying before dividing avoids truncating a
+ * fixed-point ratio before applying it to the flow:
+ *
+ *     request * capacity / total_request
+ *
+ * rather than:
+ *
+ *     request * (capacity / total_request)
+ *
+ * This is important for conservation of physical
+ * quantities across logistics flows.
+ */
+for (std::string const& edge_id : allocation.path.edge_ids) {
+fixed_point_t total_edge_request = 0;
 
-				for (size_t j = 0; j < allocations.size(); ++j) {
-					LogisticsGraphFlowAllocation const& other = allocations[j];
+for (size_t j = 0; j < allocations.size(); ++j) {
+LogisticsGraphFlowAllocation const& other = allocations[j];
 
-					if (
-						!other.path.found ||
-						other.requested <= fixed_point_t::_0
-					) {
-						continue;
-					}
+if (
+!other.path.found ||
+other.requested <= fixed_point_t::_0
+) {
+continue;
+}
 
-					if (
-						std::find(
-							other.path.edge_ids.begin(),
-							other.path.edge_ids.end(),
-							edge_id
-						) != other.path.edge_ids.end()
-					) {
-						total_edge_request += other.requested;
-					}
-				}
+if (
+std::find(
+other.path.edge_ids.begin(),
+other.path.edge_ids.end(),
+edge_id
+) != other.path.edge_ids.end()
+) {
+total_edge_request += other.requested;
+}
+}
 
-				fixed_point_t const capacity =
-					get_edge_effective_capacity(edge_id);
+fixed_point_t const capacity =
+get_edge_effective_capacity(edge_id);
 
-				fixed_point_t const edge_fraction =
-					total_edge_request > fixed_point_t::_0
-						? std::min(
-							fixed_point_t::_1,
-							capacity / total_edge_request
-						)
-						: fixed_point_t::_1;
+fixed_point_t const edge_allocation =
+total_edge_request > fixed_point_t::_0
+? std::min(
+allocation.requested,
+(
+allocation.requested *
+capacity
+) /
+total_edge_request
+)
+: allocation.requested;
 
-				limiting_fraction =
-					std::min(limiting_fraction, edge_fraction);
-			}
+limiting_allocation =
+std::min(
+limiting_allocation,
+edge_allocation
+);
+}
 
-			allocation.allocated =
-				allocation.requested * limiting_fraction;
+allocation.allocated =
+std::max(
+fixed_point_t::_0,
+limiting_allocation
+);
 		}
 
 		// Residual shortfall may use a second path after primary allocations

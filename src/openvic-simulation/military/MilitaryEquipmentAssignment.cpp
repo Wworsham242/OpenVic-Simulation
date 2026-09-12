@@ -317,6 +317,188 @@ allocate_replenishment(
 
 bool
 MilitaryEquipmentAssignmentState::
+allocate_network_replenishment(
+    MilitaryFormationInstanceManager const&
+        formation_manager,
+    std::span<
+        MilitaryEquipmentAllocationRequest const
+    > requests,
+    LogisticsGraph const& logistics_graph,
+    delivery_endpoint_provider_t const&
+        endpoint_provider,
+    MilitaryEquipmentAllocator::draw_provider_t const&
+        draw_provider,
+    MilitaryEquipmentAllocationResult&
+        allocation_result,
+    MilitaryEquipmentDeliveryResult&
+        delivery_result
+) const {
+    std::vector<
+        MilitaryEquipmentDeliveryRequest
+    > delivery_requests;
+
+    /*
+     * Build physical network demands from real persistent shortfall.
+     *
+     * This pass performs no stock mutation.
+     */
+    for (
+        MilitaryEquipmentAllocationRequest const&
+            allocation_request :
+        requests
+    ) {
+        MilitaryFormationInstance const* const
+            formation =
+                formation_manager.
+                    get_military_formation_instance_by_unique_id(
+                        allocation_request.
+                            formation_unique_id
+                    );
+
+        if (formation == nullptr) {
+            spdlog::error_s(
+                "Cannot route replenishment for unknown "
+                "military formation {}.",
+                allocation_request.
+                    formation_unique_id
+            );
+
+            return false;
+        }
+
+        auto const equipment_requirements =
+            formation->
+                get_formation_definition().
+                get_equipment_requirements();
+
+        for (
+            MilitaryEquipmentRequirement const&
+                requirement :
+            equipment_requirements
+        ) {
+            fixed_point_t const shortfall =
+                get_outstanding_requirement(
+                    formation_manager,
+                    allocation_request.
+                        formation_unique_id,
+                    requirement.item_id
+                );
+
+            if (
+                shortfall <
+                fixed_point_t::_0
+            ) {
+                return false;
+            }
+
+            if (
+                shortfall ==
+                fixed_point_t::_0
+            ) {
+                continue;
+            }
+
+            auto const endpoint =
+                endpoint_provider(
+                    allocation_request.
+                        formation_unique_id,
+                    requirement.item_id
+                );
+
+            if (!endpoint.has_value()) {
+                spdlog::error_s(
+                    "No logistics endpoints available "
+                    "for formation {} item {}.",
+                    allocation_request.
+                        formation_unique_id,
+                    requirement.item_id
+                );
+
+                return false;
+            }
+
+            delivery_requests.push_back(
+                MilitaryEquipmentDeliveryRequest {
+                    .formation_unique_id =
+                        allocation_request.
+                            formation_unique_id,
+                    .item_id =
+                        std::string {
+                            requirement.item_id
+                        },
+                    .source_node =
+                        endpoint->source_node,
+                    .destination_node =
+                        endpoint->
+                            destination_node,
+                    .requested_quantity =
+                        shortfall
+                }
+            );
+        }
+    }
+
+    MilitaryEquipmentDeliveryResult
+        candidate_delivery;
+
+    if (
+        !MilitaryEquipmentDeliveryResolver::
+            resolve(
+                logistics_graph,
+                delivery_requests,
+                candidate_delivery
+            )
+    ) {
+        return false;
+    }
+
+    MilitaryEquipmentAllocationResult
+        candidate_allocation;
+
+    /*
+     * The generic allocator retains stock authority and priority.
+     *
+     * Network resolution simply caps how much demand is physically
+     * capable of reaching the destination during this pass.
+     */
+    bool const allocated =
+        MilitaryEquipmentAllocator::
+            allocate_with_quantity_provider(
+                formation_manager,
+                requests,
+                [
+                    &candidate_delivery
+                ](
+                    unique_id_t formation_unique_id,
+                    std::string_view item_id,
+                    fixed_point_t
+                ) {
+                    return
+                        candidate_delivery.
+                            get_deliverable_quantity(
+                                formation_unique_id,
+                                item_id
+                            );
+                },
+                draw_provider,
+                candidate_allocation
+            );
+
+    if (!allocated) {
+        return false;
+    }
+
+    delivery_result =
+        std::move(candidate_delivery);
+
+    allocation_result =
+        std::move(candidate_allocation);
+
+    return true;
+}
+
+bool
+MilitaryEquipmentAssignmentState::
 release(
     unique_id_t formation_unique_id,
     std::string_view item_id,
