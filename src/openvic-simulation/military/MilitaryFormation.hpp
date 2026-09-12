@@ -6,6 +6,7 @@
 
 #include "openvic-simulation/core/memory/Vector.hpp"
 #include "openvic-simulation/military/MilitaryDomain.hpp"
+#include "openvic-simulation/military/MilitarySupport.hpp"
 #include "openvic-simulation/types/HasIdentifier.hpp"
 #include "openvic-simulation/types/IdentifierRegistry.hpp"
 #include "openvic-simulation/types/fixed_point/FixedPoint.hpp"
@@ -89,6 +90,18 @@ private:
         MilitaryHostingRequirement
     > hosting_requirements;
 
+    /*
+     * Optional sustainment dependencies.
+     *
+     * Empty means this formation has no declared support
+     * requirement and therefore no mandatory support penalty.
+     */
+    memory::vector<
+        std::reference_wrapper<
+            MilitarySupportTypeDefinition const
+        >
+    > required_support_types;
+
 public:
     MilitaryFormationDefinition(
         std::string_view new_identifier,
@@ -103,7 +116,12 @@ public:
         >&& new_hosting_provisions,
         memory::vector<
             MilitaryHostingRequirement
-        >&& new_hosting_requirements
+        >&& new_hosting_requirements,
+        memory::vector<
+            std::reference_wrapper<
+                MilitarySupportTypeDefinition const
+            >
+        >&& new_required_support_types
     );
 
     MilitaryFormationDefinition(
@@ -141,6 +159,22 @@ public:
     get_hosting_requirements() const {
         return hosting_requirements;
     }
+
+    [[nodiscard]]
+    std::span<
+        std::reference_wrapper<
+            MilitarySupportTypeDefinition const
+        > const
+    >
+    get_required_support_types() const {
+        return required_support_types;
+    }
+
+    [[nodiscard]]
+    bool requires_support_type(
+        MilitarySupportTypeDefinition const&
+            support_type
+    ) const;
 
     [[nodiscard]]
     bool has_capability(
@@ -224,6 +258,25 @@ public:
         std::span<
             MilitaryHostingRequirementSpec const
         > hosting_requirements
+    );
+
+    bool add_military_formation(
+        std::string_view identifier,
+        MilitaryDomainDefinition const& domain,
+        std::span<
+            MilitaryCapabilityDefinition const*
+                const
+        > capabilities,
+        std::span<
+            MilitaryHostingProvisionSpec const
+        > hosting_provisions,
+        std::span<
+            MilitaryHostingRequirementSpec const
+        > hosting_requirements,
+        std::span<
+            MilitarySupportTypeDefinition const*
+                const
+        > required_support_types
     );
 };
 

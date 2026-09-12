@@ -32,7 +32,12 @@ MilitaryFormationDefinition(
     >&& new_hosting_provisions,
     memory::vector<
         MilitaryHostingRequirement
-    >&& new_hosting_requirements
+    >&& new_hosting_requirements,
+    memory::vector<
+        std::reference_wrapper<
+            MilitarySupportTypeDefinition const
+        >
+    >&& new_required_support_types
 ) :
     HasIdentifier { new_identifier },
     domain { new_domain },
@@ -42,7 +47,27 @@ MilitaryFormationDefinition(
     },
     hosting_requirements {
         std::move(new_hosting_requirements)
+    },
+    required_support_types {
+        std::move(new_required_support_types)
     } {}
+
+bool MilitaryFormationDefinition::
+requires_support_type(
+    MilitarySupportTypeDefinition const&
+        support_type
+) const {
+    return std::ranges::any_of(
+        required_support_types,
+        [&support_type](
+            auto const& existing
+        ) {
+            return
+                &existing.get() ==
+                &support_type;
+        }
+    );
+}
 
 bool MilitaryFormationDefinition::has_capability(
     MilitaryCapabilityDefinition const&
@@ -181,6 +206,40 @@ add_military_formation(
     std::span<
         MilitaryHostingRequirementSpec const
     > new_hosting_requirements
+) {
+    std::span<
+        MilitarySupportTypeDefinition const*
+            const
+    > const no_required_support {};
+
+    return add_military_formation(
+        identifier,
+        domain,
+        new_capabilities,
+        new_hosting_provisions,
+        new_hosting_requirements,
+        no_required_support
+    );
+}
+
+bool MilitaryFormationManager::
+add_military_formation(
+    std::string_view identifier,
+    MilitaryDomainDefinition const& domain,
+    std::span<
+        MilitaryCapabilityDefinition const*
+            const
+    > new_capabilities,
+    std::span<
+        MilitaryHostingProvisionSpec const
+    > new_hosting_provisions,
+    std::span<
+        MilitaryHostingRequirementSpec const
+    > new_hosting_requirements,
+    std::span<
+        MilitarySupportTypeDefinition const*
+            const
+    > new_required_support_types
 ) {
     if (identifier.empty()) {
         spdlog::error_s(
@@ -365,12 +424,66 @@ add_military_formation(
         );
     }
 
+    memory::vector<
+        std::reference_wrapper<
+            MilitarySupportTypeDefinition const
+        >
+    > required_support_types;
+
+    required_support_types.reserve(
+        new_required_support_types.size()
+    );
+
+    for (
+        MilitarySupportTypeDefinition const*
+            support_type :
+        new_required_support_types
+    ) {
+        if (support_type == nullptr) {
+            spdlog::error_s(
+                "Military formation {} has "
+                "a null required support type.",
+                identifier
+            );
+
+            return false;
+        }
+
+        bool const duplicate =
+            std::ranges::any_of(
+                required_support_types,
+                [support_type](
+                    auto const& existing
+                ) {
+                    return
+                        &existing.get() ==
+                        support_type;
+                }
+            );
+
+        if (duplicate) {
+            spdlog::error_s(
+                "Military formation {} contains "
+                "duplicate required support type {}.",
+                identifier,
+                *support_type
+            );
+
+            return false;
+        }
+
+        required_support_types.emplace_back(
+            *support_type
+        );
+    }
+
     return military_formations.emplace_item(
         identifier,
         identifier,
         domain,
         std::move(capabilities),
         std::move(hosting_provisions),
-        std::move(hosting_requirements)
+        std::move(hosting_requirements),
+        std::move(required_support_types)
     );
 }

@@ -19,6 +19,7 @@ MilitaryFormationInstance(
         new_formation_definition
     },
     readiness { new_readiness },
+    sustainment { fixed_point_t::_1 },
     unique_id { new_unique_id } {}
 
 bool MilitaryFormationInstance::set_readiness(
@@ -573,6 +574,120 @@ remove_support_relationship(
     }
 
     formation->support_relationships.erase(it);
+
+    return true;
+}
+bool MilitaryFormationInstanceManager::
+evaluate_support_sustainment(
+    unique_id_t formation_unique_id,
+    std::function<
+        fixed_point_t(std::string_view)
+    > const& support_availability_provider
+) {
+    MilitaryFormationInstance* const formation =
+        get_military_formation_instance_by_unique_id(
+            formation_unique_id
+        );
+
+    if (formation == nullptr) {
+        spdlog::error_s(
+            "Cannot evaluate support sustainment "
+            "for unknown military formation {}.",
+            formation_unique_id
+        );
+
+        return false;
+    }
+
+    auto const required_support_types =
+        formation->
+            get_formation_definition().
+            get_required_support_types();
+
+    /*
+     * No declared support dependency means no mandatory support
+     * penalty. This is what permits an austere force to exist
+     * without pretending it owns a sophisticated base network.
+     */
+    if (required_support_types.empty()) {
+        formation->sustainment =
+            fixed_point_t::_1;
+
+        return true;
+    }
+
+    fixed_point_t overall =
+        fixed_point_t::_1;
+
+    for (
+        auto const& required_reference :
+        required_support_types
+    ) {
+        MilitarySupportTypeDefinition const&
+            required_type =
+                required_reference.get();
+
+        fixed_point_t best_available = 0;
+
+        for (
+            MilitarySupportRelationship const&
+                relationship :
+            formation->support_relationships
+        ) {
+            if (
+                &relationship.support_type.get() !=
+                &required_type
+            ) {
+                continue;
+            }
+
+            fixed_point_t const availability =
+                support_availability_provider(
+                    relationship.target_id
+                );
+
+            if (
+                availability < 0 ||
+                availability > 1
+            ) {
+                spdlog::error_s(
+                    "Support availability provider "
+                    "returned {} outside [0,1] "
+                    "for target {}.",
+                    availability,
+                    relationship.target_id
+                );
+
+                return false;
+            }
+
+            if (
+                availability >
+                best_available
+            ) {
+                best_available =
+                    availability;
+            }
+        }
+
+        /*
+         * Redundant nodes of the same required type substitute for
+         * one another, so use the best available linked node.
+         *
+         * Different required support types are complementary
+         * bottlenecks, so the weakest required type constrains
+         * overall sustainment.
+         */
+        if (
+            best_available <
+            overall
+        ) {
+            overall =
+                best_available;
+        }
+    }
+
+    formation->sustainment = overall;
 
     return true;
 }

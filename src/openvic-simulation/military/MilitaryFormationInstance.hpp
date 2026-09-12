@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <string_view>
 
 #include "openvic-simulation/core/memory/String.hpp"
@@ -30,6 +31,14 @@ private:
         formation_definition;
 
     fixed_point_t PROPERTY(readiness);
+
+    /*
+     * Authoritative support-derived sustainment condition.
+     *
+     * This remains distinct from readiness because readiness will
+     * eventually depend on several causal inputs beyond support.
+     */
+    fixed_point_t PROPERTY(sustainment);
 
     /*
      * Current operational placement.
@@ -217,6 +226,20 @@ public:
         MilitarySupportTypeDefinition const&
             support_type,
         std::string_view target_id
+    );
+
+    /*
+     * The provider exposes availability of authoritative support
+     * targets without duplicating target operational state inside
+     * the military runtime.
+     *
+     * Provider values must be within [0,1].
+     */
+    bool evaluate_support_sustainment(
+        unique_id_t formation_unique_id,
+        std::function<
+            fixed_point_t(std::string_view)
+        > const& support_availability_provider
     );
 
     [[nodiscard]]
