@@ -272,6 +272,22 @@ public:
         fixed_point_t max_adjustment
     );
 
+    /*
+     * Derive equipment condition from quantities owned by another
+     * authoritative domain.
+     *
+     * The provider returns the quantity assigned/available to this
+     * formation for a content-defined equipment item identifier.
+     *
+     * No stock is stored here.
+     */
+    bool evaluate_equipment_condition(
+        unique_id_t formation_unique_id,
+        std::function<
+            fixed_point_t(std::string_view)
+        > const& equipment_quantity_provider
+    );
+
     [[nodiscard]]
     std::string_view
     get_effective_operational_position_id(

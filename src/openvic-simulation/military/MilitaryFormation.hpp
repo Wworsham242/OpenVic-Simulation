@@ -4,6 +4,7 @@
 #include <span>
 #include <string_view>
 
+#include "openvic-simulation/core/memory/String.hpp"
 #include "openvic-simulation/core/memory/Vector.hpp"
 #include "openvic-simulation/military/MilitaryDomain.hpp"
 #include "openvic-simulation/military/MilitarySupport.hpp"
@@ -72,6 +73,23 @@ struct MilitaryHostingRequirement {
     fixed_point_t demand = 0;
 };
 
+/*
+ * Equipment semantics remain content-defined.
+ *
+ * item_id may resolve to an economy good, historical equipment
+ * category, vehicle family, weapon family, or another authoritative
+ * stock identity outside the military runtime.
+ */
+struct MilitaryEquipmentRequirementSpec {
+    std::string_view item_id;
+    fixed_point_t required_quantity = 0;
+};
+
+struct MilitaryEquipmentRequirement {
+    memory::string item_id;
+    fixed_point_t required_quantity = 0;
+};
+
 struct MilitaryFormationDefinition : HasIdentifier {
 private:
     MilitaryDomainDefinition const& domain;
@@ -102,6 +120,15 @@ private:
         >
     > required_support_types;
 
+    /*
+     * Optional externally-owned equipment requirements.
+     *
+     * This stores requirements only. It does not own stock.
+     */
+    memory::vector<
+        MilitaryEquipmentRequirement
+    > equipment_requirements;
+
 public:
     MilitaryFormationDefinition(
         std::string_view new_identifier,
@@ -121,7 +148,10 @@ public:
             std::reference_wrapper<
                 MilitarySupportTypeDefinition const
             >
-        >&& new_required_support_types
+        >&& new_required_support_types,
+        memory::vector<
+            MilitaryEquipmentRequirement
+        >&& new_equipment_requirements
     );
 
     MilitaryFormationDefinition(
@@ -175,6 +205,19 @@ public:
         MilitarySupportTypeDefinition const&
             support_type
     ) const;
+
+    [[nodiscard]]
+    std::span<
+        MilitaryEquipmentRequirement const
+    >
+    get_equipment_requirements() const {
+        return equipment_requirements;
+    }
+
+    [[nodiscard]]
+    bool has_equipment_requirements() const {
+        return !equipment_requirements.empty();
+    }
 
     [[nodiscard]]
     bool has_capability(
@@ -277,6 +320,28 @@ public:
             MilitarySupportTypeDefinition const*
                 const
         > required_support_types
+    );
+
+    bool add_military_formation(
+        std::string_view identifier,
+        MilitaryDomainDefinition const& domain,
+        std::span<
+            MilitaryCapabilityDefinition const*
+                const
+        > capabilities,
+        std::span<
+            MilitaryHostingProvisionSpec const
+        > hosting_provisions,
+        std::span<
+            MilitaryHostingRequirementSpec const
+        > hosting_requirements,
+        std::span<
+            MilitarySupportTypeDefinition const*
+                const
+        > required_support_types,
+        std::span<
+            MilitaryEquipmentRequirementSpec const
+        > equipment_requirements
     );
 };
 

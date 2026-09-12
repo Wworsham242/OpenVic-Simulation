@@ -37,7 +37,10 @@ MilitaryFormationDefinition(
         std::reference_wrapper<
             MilitarySupportTypeDefinition const
         >
-    >&& new_required_support_types
+    >&& new_required_support_types,
+    memory::vector<
+        MilitaryEquipmentRequirement
+    >&& new_equipment_requirements
 ) :
     HasIdentifier { new_identifier },
     domain { new_domain },
@@ -50,6 +53,9 @@ MilitaryFormationDefinition(
     },
     required_support_types {
         std::move(new_required_support_types)
+    },
+    equipment_requirements {
+        std::move(new_equipment_requirements)
     } {}
 
 bool MilitaryFormationDefinition::
@@ -240,6 +246,43 @@ add_military_formation(
         MilitarySupportTypeDefinition const*
             const
     > new_required_support_types
+) {
+    std::span<
+        MilitaryEquipmentRequirementSpec const
+    > const no_equipment_requirements {};
+
+    return add_military_formation(
+        identifier,
+        domain,
+        new_capabilities,
+        new_hosting_provisions,
+        new_hosting_requirements,
+        new_required_support_types,
+        no_equipment_requirements
+    );
+}
+
+bool MilitaryFormationManager::
+add_military_formation(
+    std::string_view identifier,
+    MilitaryDomainDefinition const& domain,
+    std::span<
+        MilitaryCapabilityDefinition const*
+            const
+    > new_capabilities,
+    std::span<
+        MilitaryHostingProvisionSpec const
+    > new_hosting_provisions,
+    std::span<
+        MilitaryHostingRequirementSpec const
+    > new_hosting_requirements,
+    std::span<
+        MilitarySupportTypeDefinition const*
+            const
+    > new_required_support_types,
+    std::span<
+        MilitaryEquipmentRequirementSpec const
+    > new_equipment_requirements
 ) {
     if (identifier.empty()) {
         spdlog::error_s(
@@ -477,6 +520,76 @@ add_military_formation(
         );
     }
 
+    memory::vector<
+        MilitaryEquipmentRequirement
+    > equipment_requirements;
+
+    equipment_requirements.reserve(
+        new_equipment_requirements.size()
+    );
+
+    for (
+        MilitaryEquipmentRequirementSpec const&
+            requirement :
+        new_equipment_requirements
+    ) {
+        if (requirement.item_id.empty()) {
+            spdlog::error_s(
+                "Military formation {} has an empty "
+                "equipment requirement identifier.",
+                identifier
+            );
+
+            return false;
+        }
+
+        if (requirement.required_quantity <= 0) {
+            spdlog::error_s(
+                "Military formation {} has non-positive "
+                "equipment requirement {}.",
+                identifier,
+                requirement.item_id
+            );
+
+            return false;
+        }
+
+        bool const duplicate =
+            std::ranges::any_of(
+                equipment_requirements,
+                [&requirement](
+                    MilitaryEquipmentRequirement const&
+                        existing
+                ) {
+                    return
+                        existing.item_id ==
+                        requirement.item_id;
+                }
+            );
+
+        if (duplicate) {
+            spdlog::error_s(
+                "Military formation {} contains duplicate "
+                "equipment requirement {}.",
+                identifier,
+                requirement.item_id
+            );
+
+            return false;
+        }
+
+        equipment_requirements.push_back(
+            MilitaryEquipmentRequirement {
+                .item_id =
+                    memory::string {
+                        requirement.item_id
+                    },
+                .required_quantity =
+                    requirement.required_quantity
+            }
+        );
+    }
+
     return military_formations.emplace_item(
         identifier,
         identifier,
@@ -484,6 +597,7 @@ add_military_formation(
         std::move(capabilities),
         std::move(hosting_provisions),
         std::move(hosting_requirements),
-        std::move(required_support_types)
+        std::move(required_support_types),
+        std::move(equipment_requirements)
     );
 }

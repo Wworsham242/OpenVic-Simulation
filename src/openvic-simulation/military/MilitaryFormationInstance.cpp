@@ -825,3 +825,93 @@ adjust_readiness_toward(
 
     return true;
 }
+bool MilitaryFormationInstanceManager::
+evaluate_equipment_condition(
+    unique_id_t formation_unique_id,
+    std::function<
+        fixed_point_t(std::string_view)
+    > const& equipment_quantity_provider
+) {
+    MilitaryFormationInstance* const formation =
+        get_military_formation_instance_by_unique_id(
+            formation_unique_id
+        );
+
+    if (formation == nullptr) {
+        spdlog::error_s(
+            "Cannot evaluate equipment condition for "
+            "unknown military formation {}.",
+            formation_unique_id
+        );
+
+        return false;
+    }
+
+    auto const requirements =
+        formation->
+            formation_definition.
+            get_equipment_requirements();
+
+    /*
+     * Equipment mechanics remain optional.
+     *
+     * A formation with no declared equipment requirements is not
+     * forced into an equipment model.
+     */
+    if (requirements.empty()) {
+        formation->equipment_condition =
+            fixed_point_t::_1;
+
+        return true;
+    }
+
+    fixed_point_t candidate =
+        fixed_point_t::_1;
+
+    for (
+        MilitaryEquipmentRequirement const&
+            requirement :
+        requirements
+    ) {
+        fixed_point_t const available =
+            equipment_quantity_provider(
+                requirement.item_id
+            );
+
+        if (available < 0) {
+            spdlog::error_s(
+                "Equipment quantity provider returned "
+                "negative quantity {} for item {}.",
+                available,
+                requirement.item_id
+            );
+
+            return false;
+        }
+
+        fixed_point_t availability_fraction =
+            available /
+            requirement.required_quantity;
+
+        if (
+            availability_fraction >
+            fixed_point_t::_1
+        ) {
+            availability_fraction =
+                fixed_point_t::_1;
+        }
+
+        if (
+            availability_fraction <
+            candidate
+        ) {
+            candidate =
+                availability_fraction;
+        }
+    }
+
+    formation->equipment_condition =
+        candidate;
+
+    return true;
+}
