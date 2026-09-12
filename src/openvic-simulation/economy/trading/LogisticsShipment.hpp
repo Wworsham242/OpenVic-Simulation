@@ -127,6 +127,11 @@ fixed_point_t get_arrived_quantity(
 std::string_view content_id
 ) const;
 
+[[nodiscard]]
+bool can_dispatch(
+LogisticsShipmentRequest const& request
+) const;
+
 /*
  * Removes material from authoritative source stock and creates
  * persistent in-transit state.

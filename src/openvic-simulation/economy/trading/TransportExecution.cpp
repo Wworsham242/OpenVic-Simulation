@@ -177,15 +177,11 @@ set_resource_enabled(
 
 bool
 TransportExecutionState::
-reserve(
-    unique_id_t shipment_unique_id,
+can_reserve(
     std::span<TransportExecutionRequirement const> requirements,
-    Date start_date,
-    Timespan occupation_time,
-    unique_id_t* created_reservation_unique_id
-) {
+    Timespan occupation_time
+) const {
     if (
-        shipment_unique_id == 0 ||
         requirements.empty() ||
         occupation_time <= Timespan { 0 }
     ) {
@@ -242,6 +238,140 @@ reserve(
             return false;
         }
     }
+
+    return true;
+}
+
+bool
+TransportExecutionState::
+reserve_planned(
+    std::span<TransportExecutionRequirement const> requirements,
+    Date start_date,
+    Timespan occupation_time,
+    unique_id_t* created_reservation_unique_id
+) {
+    if (!can_reserve(requirements, occupation_time)) {
+        return false;
+    }
+
+    std::vector<TransportExecutionRequirement> ordered {
+        requirements.begin(),
+        requirements.end()
+    };
+
+    std::ranges::sort(
+        ordered,
+        [](auto const& lhs, auto const& rhs) {
+            return lhs.resource_id < rhs.resource_id;
+        }
+    );
+
+    unique_id_t const reservation_id =
+        next_reservation_unique_id++;
+
+    reservations.push_back(
+        TransportExecutionReservation {
+            .reservation_unique_id = reservation_id,
+            .shipment_unique_id = 0,
+            .start_date = start_date,
+            .release_date = start_date + occupation_time,
+            .requirements = std::move(ordered),
+            .active = true
+        }
+    );
+
+    if (created_reservation_unique_id != nullptr) {
+        *created_reservation_unique_id = reservation_id;
+    }
+
+    return true;
+}
+
+bool
+TransportExecutionState::
+bind_reservation_to_shipment(
+    unique_id_t reservation_unique_id,
+    unique_id_t shipment_unique_id
+) {
+    if (shipment_unique_id == 0) {
+        return false;
+    }
+
+    auto const it = std::find_if(
+        reservations.begin(),
+        reservations.end(),
+        [reservation_unique_id](auto const& reservation) {
+            return
+                reservation.reservation_unique_id ==
+                reservation_unique_id;
+        }
+    );
+
+    if (
+        it == reservations.end() ||
+        !it->active ||
+        it->shipment_unique_id != 0
+    ) {
+        return false;
+    }
+
+    it->shipment_unique_id = shipment_unique_id;
+    return true;
+}
+
+bool
+TransportExecutionState::
+cancel_reservation(
+    unique_id_t reservation_unique_id
+) {
+    auto const it = std::find_if(
+        reservations.begin(),
+        reservations.end(),
+        [reservation_unique_id](auto const& reservation) {
+            return
+                reservation.reservation_unique_id ==
+                reservation_unique_id;
+        }
+    );
+
+    if (
+        it == reservations.end() ||
+        !it->active
+    ) {
+        return false;
+    }
+
+    it->active = false;
+    return true;
+}
+
+bool
+TransportExecutionState::
+reserve(
+    unique_id_t shipment_unique_id,
+    std::span<TransportExecutionRequirement const> requirements,
+    Date start_date,
+    Timespan occupation_time,
+    unique_id_t* created_reservation_unique_id
+) {
+    if (
+        shipment_unique_id == 0 ||
+        !can_reserve(requirements, occupation_time)
+    ) {
+        return false;
+    }
+
+    std::vector<TransportExecutionRequirement> ordered {
+        requirements.begin(),
+        requirements.end()
+    };
+
+    std::ranges::sort(
+        ordered,
+        [](auto const& lhs, auto const& rhs) {
+            return lhs.resource_id < rhs.resource_id;
+        }
+    );
 
     unique_id_t const reservation_id =
         next_reservation_unique_id++;

@@ -111,6 +111,37 @@ public:
         bool enabled
     );
 
+    [[nodiscard]]
+    bool can_reserve(
+        std::span<TransportExecutionRequirement const> requirements,
+        Timespan occupation_time
+    ) const;
+
+    /*
+     * Reserve execution capacity before a physical shipment exists.
+     *
+     * The reservation is created with shipment_unique_id == 0 and
+     * must later be bound to a committed shipment or cancelled.
+     */
+    [[nodiscard]]
+    bool reserve_planned(
+        std::span<TransportExecutionRequirement const> requirements,
+        Date start_date,
+        Timespan occupation_time,
+        unique_id_t* created_reservation_unique_id = nullptr
+    );
+
+    [[nodiscard]]
+    bool bind_reservation_to_shipment(
+        unique_id_t reservation_unique_id,
+        unique_id_t shipment_unique_id
+    );
+
+    [[nodiscard]]
+    bool cancel_reservation(
+        unique_id_t reservation_unique_id
+    );
+
     /*
      * Atomically reserve all required execution resources.
      *

@@ -78,6 +78,18 @@ return total;
 
 bool
 LogisticsShipmentState::
+can_dispatch(
+LogisticsShipmentRequest const& request
+) const {
+return
+!request.content_id.empty() &&
+request.requested_quantity > fixed_point_t::_0 &&
+request.path.found &&
+request.required_transit_time > Timespan { 0 };
+}
+
+bool
+LogisticsShipmentState::
 dispatch(
 LogisticsShipmentRequest const& request,
 Date dispatch_date,
@@ -85,14 +97,7 @@ source_draw_provider_t const&
 source_draw_provider,
 unique_id_t* created_shipment_unique_id
 ) {
-if (
-request.content_id.empty() ||
-request.requested_quantity <=
-fixed_point_t::_0 ||
-!request.path.found ||
-request.required_transit_time <=
-Timespan { 0 }
-) {
+if (!can_dispatch(request)) {
 return false;
 }
 
