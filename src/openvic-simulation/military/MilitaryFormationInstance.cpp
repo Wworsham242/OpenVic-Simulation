@@ -691,3 +691,104 @@ evaluate_support_sustainment(
 
     return true;
 }
+bool MilitaryFormationInstanceManager::
+adjust_readiness_toward(
+    unique_id_t formation_unique_id,
+    fixed_point_t desired_readiness,
+    fixed_point_t max_adjustment
+) {
+    MilitaryFormationInstance* const formation =
+        get_military_formation_instance_by_unique_id(
+            formation_unique_id
+        );
+
+    if (formation == nullptr) {
+        spdlog::error_s(
+            "Cannot adjust readiness for unknown "
+            "military formation {}.",
+            formation_unique_id
+        );
+
+        return false;
+    }
+
+    if (
+        desired_readiness < 0 ||
+        desired_readiness > 1
+    ) {
+        spdlog::error_s(
+            "Military formation {} desired readiness "
+            "{} is outside [0,1].",
+            formation_unique_id,
+            desired_readiness
+        );
+
+        return false;
+    }
+
+    if (
+        max_adjustment <= 0 ||
+        max_adjustment > 1
+    ) {
+        spdlog::error_s(
+            "Military formation {} readiness "
+            "adjustment {} must be within (0,1].",
+            formation_unique_id,
+            max_adjustment
+        );
+
+        return false;
+    }
+
+    /*
+     * Sustainment is a ceiling, not the readiness value itself.
+     *
+     * Other mechanisms may request a lower readiness target. That
+     * lower target remains authoritative for this transition.
+     */
+    fixed_point_t const effective_target =
+        desired_readiness <
+            formation->sustainment
+        ? desired_readiness
+        : formation->sustainment;
+
+    if (
+        formation->readiness ==
+        effective_target
+    ) {
+        return true;
+    }
+
+    if (
+        formation->readiness <
+        effective_target
+    ) {
+        fixed_point_t const gap =
+            effective_target -
+            formation->readiness;
+
+        fixed_point_t const adjustment =
+            gap < max_adjustment
+            ? gap
+            : max_adjustment;
+
+        formation->readiness +=
+            adjustment;
+
+        return true;
+    }
+
+    fixed_point_t const gap =
+        formation->readiness -
+        effective_target;
+
+    fixed_point_t const adjustment =
+        gap < max_adjustment
+        ? gap
+        : max_adjustment;
+
+    formation->readiness -=
+        adjustment;
+
+    return true;
+}

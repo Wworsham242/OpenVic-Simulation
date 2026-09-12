@@ -242,6 +242,22 @@ public:
         > const& support_availability_provider
     );
 
+    /*
+     * Move authoritative readiness toward a desired readiness,
+     * subject to the formation's current sustainment ceiling.
+     *
+     * desired_readiness represents the readiness level requested
+     * by other causal inputs. Sustainment is only one constraint
+     * and does not directly overwrite readiness.
+     *
+     * max_adjustment bounds the change performed by one call.
+     */
+    bool adjust_readiness_toward(
+        unique_id_t formation_unique_id,
+        fixed_point_t desired_readiness,
+        fixed_point_t max_adjustment
+    );
+
     [[nodiscard]]
     std::string_view
     get_effective_operational_position_id(
