@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <functional>
 #include <span>
 #include <string_view>
@@ -92,6 +93,20 @@ private:
  *
  * It must return a quantity in [0, requested].
  */
+/*
+ * Allocation priority is intentionally semantic-free.
+ *
+ * Higher values allocate first.
+ * Equal values are resolved by stable formation unique ID.
+ *
+ * The source of priority belongs to command, policy, AI,
+ * mobilization, scenario data, or another external authority.
+ */
+struct MilitaryEquipmentAllocationRequest {
+    unique_id_t formation_unique_id = 0;
+    int64_t priority = 0;
+};
+
 struct MilitaryEquipmentAllocator final {
     using draw_provider_t =
         std::function<
@@ -101,12 +116,34 @@ struct MilitaryEquipmentAllocator final {
             )
         >;
 
+    /*
+     * Compatibility overload.
+     *
+     * All formations receive priority zero, preserving the 005A18
+     * deterministic formation-ID ordering.
+     */
     static bool allocate(
         MilitaryFormationInstanceManager const&
             formation_manager,
         std::span<
             unique_id_t const
         > formation_unique_ids,
+        draw_provider_t const& draw_provider,
+        MilitaryEquipmentAllocationResult& result
+    );
+
+    /*
+     * Priority-aware allocation.
+     *
+     * Higher priority allocates first.
+     * Stable formation ID breaks ties.
+     */
+    static bool allocate(
+        MilitaryFormationInstanceManager const&
+            formation_manager,
+        std::span<
+            MilitaryEquipmentAllocationRequest const
+        > requests,
         draw_provider_t const& draw_provider,
         MilitaryEquipmentAllocationResult& result
     );

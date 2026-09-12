@@ -119,23 +119,75 @@ bool MilitaryEquipmentAllocator::allocate(
     draw_provider_t const& draw_provider,
     MilitaryEquipmentAllocationResult& result
 ) {
-    /*
-     * Validate the complete request set before drawing anything.
-     * A malformed formation list therefore cannot partially consume
-     * external stock.
-     */
-    std::vector<unique_id_t> ordered_ids {
-        formation_unique_ids.begin(),
-        formation_unique_ids.end()
-    };
+    std::vector<
+        MilitaryEquipmentAllocationRequest
+    > requests;
 
-    std::ranges::sort(ordered_ids);
+    requests.reserve(
+        formation_unique_ids.size()
+    );
+
+    for (
+        unique_id_t const formation_unique_id :
+        formation_unique_ids
+    ) {
+        requests.push_back(
+            MilitaryEquipmentAllocationRequest {
+                .formation_unique_id =
+                    formation_unique_id,
+                .priority = 0
+            }
+        );
+    }
+
+    return allocate(
+        formation_manager,
+        requests,
+        draw_provider,
+        result
+    );
+}
+
+bool MilitaryEquipmentAllocator::allocate(
+    MilitaryFormationInstanceManager const&
+        formation_manager,
+    std::span<
+        MilitaryEquipmentAllocationRequest const
+    > requests,
+    draw_provider_t const& draw_provider,
+    MilitaryEquipmentAllocationResult& result
+) {
+    /*
+     * Validate every formation identity before drawing anything.
+     *
+     * Duplicate detection is independent of allocation priority.
+     */
+    std::vector<unique_id_t>
+        validation_ids;
+
+    validation_ids.reserve(
+        requests.size()
+    );
+
+    for (
+        MilitaryEquipmentAllocationRequest const&
+            request :
+        requests
+    ) {
+        validation_ids.push_back(
+            request.formation_unique_id
+        );
+    }
+
+    std::ranges::sort(
+        validation_ids
+    );
 
     if (
         std::adjacent_find(
-            ordered_ids.begin(),
-            ordered_ids.end()
-        ) != ordered_ids.end()
+            validation_ids.begin(),
+            validation_ids.end()
+        ) != validation_ids.end()
     ) {
         spdlog::error_s(
             "Military equipment allocation request "
@@ -147,7 +199,7 @@ bool MilitaryEquipmentAllocator::allocate(
 
     for (
         unique_id_t const formation_unique_id :
-        ordered_ids
+        validation_ids
     ) {
         if (
             formation_manager.
@@ -165,12 +217,51 @@ bool MilitaryEquipmentAllocator::allocate(
         }
     }
 
+    /*
+     * Deterministic priority ordering:
+     *
+     * 1. higher explicit priority first;
+     * 2. lower stable formation ID breaks ties.
+     *
+     * Caller iteration order therefore has no effect.
+     */
+    std::vector<
+        MilitaryEquipmentAllocationRequest
+    > ordered_requests {
+        requests.begin(),
+        requests.end()
+    };
+
+    std::ranges::sort(
+        ordered_requests,
+        [](
+            MilitaryEquipmentAllocationRequest const&
+                lhs,
+            MilitaryEquipmentAllocationRequest const&
+                rhs
+        ) {
+            if (lhs.priority != rhs.priority) {
+                return
+                    lhs.priority >
+                    rhs.priority;
+            }
+
+            return
+                lhs.formation_unique_id <
+                rhs.formation_unique_id;
+        }
+    );
+
     MilitaryEquipmentAllocationResult candidate;
 
     for (
-        unique_id_t const formation_unique_id :
-        ordered_ids
+        MilitaryEquipmentAllocationRequest const&
+            request :
+        ordered_requests
     ) {
+        unique_id_t const formation_unique_id =
+            request.formation_unique_id;
+
         MilitaryFormationInstance const* const
             formation =
                 formation_manager.
@@ -208,13 +299,6 @@ bool MilitaryEquipmentAllocator::allocate(
                     requirement.required_quantity
                 );
 
-                /*
-                 * We cannot roll back a provider that already mutated
-                 * external state. The provider contract therefore
-                 * requires validation at its own authority boundary.
-                 *
-                 * We do, however, refuse to publish a partial result.
-                 */
                 return false;
             }
 
