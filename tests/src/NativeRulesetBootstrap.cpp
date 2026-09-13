@@ -1479,3 +1479,187 @@ TEST_CASE(
 	CHECK(instance->is_live_aggregate_production_chain_enabled());
 	CHECK(instance->get_live_economy_status().configured);
 }
+TEST_CASE(
+	"Reference setting packages compose distinct production runtimes through one engine path",
+	"[convergence][setting-composition][closure]"
+) {
+	auto const data_root =
+		std::filesystem::path { __FILE__ }.parent_path().parent_path()
+		/ "data" / "native-ruleset-bootstrap";
+
+	auto make_bronze_reference = []() {
+		SettingCapabilityManifest manifest {
+			.package_id = "reference.bronze-age",
+			.capabilities = {
+				"governance.basic",
+				"logistics.land",
+				"population.basic",
+				"production.basic",
+				"trade.physical"
+			}
+		};
+		REQUIRE(manifest.canonicalize());
+		return manifest;
+	};
+
+	auto make_modern_reference = []() {
+		SettingCapabilityManifest manifest {
+			.package_id = "reference.modern",
+			.capabilities = {
+				"economy.aggregate-production-chain",
+				"finance.banking",
+				"finance.credit",
+				"governance.basic",
+				"information.cyber",
+				"infrastructure.electric-grid",
+				"logistics.land",
+				"military.air",
+				"population.basic",
+				"population.nutrition-health",
+				"production.basic",
+				"trade.physical"
+			}
+		};
+		REQUIRE(manifest.canonicalize());
+		return manifest;
+	};
+
+	SettingCapabilityManifest bronze_manifest = make_bronze_reference();
+	SettingCapabilityManifest modern_manifest = make_modern_reference();
+
+	REQUIRE(bronze_manifest.is_canonical());
+	REQUIRE(modern_manifest.is_canonical());
+
+	CHECK(bronze_manifest.package_id == "reference.bronze-age");
+	CHECK(modern_manifest.package_id == "reference.modern");
+	CHECK(bronze_manifest.checksum() != modern_manifest.checksum());
+
+	/* Shared baseline capabilities: same universal engine path, not era branches. */
+	CHECK(bronze_manifest.has("population.basic"));
+	CHECK(modern_manifest.has("population.basic"));
+	CHECK(bronze_manifest.has("production.basic"));
+	CHECK(modern_manifest.has("production.basic"));
+	CHECK(bronze_manifest.has("trade.physical"));
+	CHECK(modern_manifest.has("trade.physical"));
+	CHECK(bronze_manifest.has("logistics.land"));
+	CHECK(modern_manifest.has("logistics.land"));
+	CHECK(bronze_manifest.has("governance.basic"));
+	CHECK(modern_manifest.has("governance.basic"));
+
+	/* Modern reference contains capabilities not yet runtime-bound by 006A3. */
+	CHECK(modern_manifest.has("finance.banking"));
+	CHECK(modern_manifest.has("finance.credit"));
+	CHECK(modern_manifest.has("information.cyber"));
+	CHECK(modern_manifest.has("infrastructure.electric-grid"));
+	CHECK(modern_manifest.has("military.air"));
+
+	GameManager bronze_manager {
+		[]() {},
+		[]() -> uint64_t { return 0; },
+		[]() -> uint64_t { return 0; }
+	};
+	REQUIRE(bronze_manager.load_native_economy_bootstrap(data_root));
+
+	NativeInstanceBootstrap bronze_bootstrap;
+	bronze_bootstrap.setting_capabilities = bronze_manifest;
+	REQUIRE(bronze_manager.setup_native_instance(std::move(bronze_bootstrap)));
+
+	InstanceManager* const bronze_instance =
+		bronze_manager.get_instance_manager();
+	REQUIRE(bronze_instance != nullptr);
+
+	CHECK_FALSE(
+		bronze_instance->is_population_nutrition_health_capability_enabled()
+	);
+	CHECK_FALSE(
+		bronze_instance->is_live_aggregate_production_chain_enabled()
+	);
+	CHECK_FALSE(bronze_instance->get_live_economy_status().configured);
+
+	GameManager modern_manager {
+		[]() {},
+		[]() -> uint64_t { return 0; },
+		[]() -> uint64_t { return 0; }
+	};
+	REQUIRE(modern_manager.load_native_economy_bootstrap(data_root));
+
+	NativeInstanceBootstrap modern_bootstrap;
+	modern_bootstrap.setting_capabilities = modern_manifest;
+	REQUIRE(modern_manager.setup_native_instance(std::move(modern_bootstrap)));
+
+	InstanceManager* const modern_instance =
+		modern_manager.get_instance_manager();
+	REQUIRE(modern_instance != nullptr);
+
+	CHECK(
+		modern_instance->is_population_nutrition_health_capability_enabled()
+	);
+	CHECK(
+		modern_instance->is_live_aggregate_production_chain_enabled()
+	);
+	CHECK(modern_instance->get_live_economy_status().configured);
+
+	/*
+	 * 006A3 closure statement:
+	 *
+	 * - Both reference packages use the same GameManager -> InstanceManager
+	 *   production setup path and the same engine binary.
+	 * - Engine code does not branch on "Bronze" or "Modern" era values.
+	 * - Runtime differences demonstrated here come only from bound capability
+	 *   membership.
+	 * - finance.*, information.cyber, infrastructure.electric-grid and
+	 *   military.air remain declarative package entries only until their
+	 *   owning domains implement explicit runtime bindings.
+	 * - Their declaration here must not be interpreted as proof that those
+	 *   mechanisms currently exist.
+	 */
+}
+
+TEST_CASE(
+	"Reference setting package labels are data and do not grant runtime capabilities",
+	"[convergence][setting-composition][closure][no-era-special-case]"
+) {
+	GameManager manager {
+		[]() {},
+		[]() -> uint64_t { return 0; },
+		[]() -> uint64_t { return 0; }
+	};
+
+	auto const data_root =
+		std::filesystem::path { __FILE__ }.parent_path().parent_path()
+		/ "data" / "native-ruleset-bootstrap";
+
+	REQUIRE(manager.load_native_economy_bootstrap(data_root));
+
+	/*
+	 * Deliberately use the "modern" package label with only baseline
+	 * capabilities. If engine era-name special casing existed, the optional
+	 * mechanisms could spuriously activate. They must remain off.
+	 */
+	SettingCapabilityManifest manifest {
+		.package_id = "reference.modern",
+		.capabilities = {
+			"governance.basic",
+			"logistics.land",
+			"population.basic",
+			"production.basic",
+			"trade.physical"
+		}
+	};
+	REQUIRE(manifest.canonicalize());
+
+	NativeInstanceBootstrap bootstrap;
+	bootstrap.setting_capabilities = std::move(manifest);
+	REQUIRE(manager.setup_native_instance(std::move(bootstrap)));
+
+	InstanceManager* const instance = manager.get_instance_manager();
+	REQUIRE(instance != nullptr);
+
+	CHECK_FALSE(
+		instance->is_population_nutrition_health_capability_enabled()
+	);
+	CHECK_FALSE(
+		instance->is_live_aggregate_production_chain_enabled()
+	);
+	CHECK_FALSE(instance->get_live_economy_status().configured);
+}
