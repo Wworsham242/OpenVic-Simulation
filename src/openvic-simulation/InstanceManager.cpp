@@ -3,6 +3,7 @@
 #include "openvic-simulation/DefinitionManager.hpp"
 #include "openvic-simulation/console/ConsoleInstance.hpp"
 #include "openvic-simulation/core/stl/containers/TypedSpan.hpp"
+#include "openvic-simulation/core/simulation/SettingCapabilityManifest.hpp"
 #include "openvic-simulation/misc/GameAction.hpp"
 #include "openvic-simulation/utility/Logger.hpp"
 
@@ -11,7 +12,8 @@ using namespace OpenVic;
 InstanceManager::InstanceManager(
 	GameRulesManager const& new_game_rules_manager,
 	DefinitionManager const& new_definition_manager,
-	gamestate_updated_func_t gamestate_updated_callback
+	gamestate_updated_func_t gamestate_updated_callback,
+	SettingCapabilityManifest const* setting_capabilities
 ) : thread_pool { today },
 	definition_manager { new_definition_manager },
 	game_action_manager { *this },
@@ -92,7 +94,9 @@ InstanceManager::InstanceManager(
 	pop_deps {
 		artisanal_producer_deps,
 		market_instance,
-		pops_aggregate_deps
+		pops_aggregate_deps,
+		setting_capabilities == nullptr
+			|| setting_capabilities->has("population.nutrition-health")
 	},
 	rgo_deps {
 		market_instance,

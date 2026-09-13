@@ -36,6 +36,7 @@
 #include "openvic-simulation/utility/ThreadPool.hpp"
 
 namespace OpenVic {
+	struct SettingCapabilityManifest;
 
 	struct DefinitionManager;
 	struct Bookmark;
@@ -103,8 +104,12 @@ namespace OpenVic {
 		InstanceManager(
 			GameRulesManager const& new_game_rules_manager,
 			DefinitionManager const& new_definition_manager,
-			gamestate_updated_func_t gamestate_updated_callback
+			gamestate_updated_func_t gamestate_updated_callback,
+			SettingCapabilityManifest const* setting_capabilities = nullptr
 		);
+		[[nodiscard]] bool is_population_nutrition_health_capability_enabled() const {
+			return pop_deps.enable_nutrition_health_capability;
+		}
 
 		inline constexpr bool is_bookmark_loaded() const {
 			return bookmark != nullptr;

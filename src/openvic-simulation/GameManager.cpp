@@ -286,12 +286,22 @@ bool GameManager::setup_native_instance(NativeInstanceBootstrap bootstrap) {
 
 	SPDLOG_INFO("Initialising native game instance.");
 
-	finalize_instance_definition_registries();
+		SettingCapabilityManifest const* setting_capabilities = nullptr;
+	if (bootstrap.setting_capabilities) {
+		if (!bootstrap.setting_capabilities->is_canonical()) {
+			spdlog::error_s("Native setting capability manifest is not canonical.");
+			return false;
+		}
+		setting_capabilities = &*bootstrap.setting_capabilities;
+	}
+
+finalize_instance_definition_registries();
 
 	instance_manager.emplace(
 		game_rules_manager,
 		definition_manager,
-		gamestate_updated_callback
+		gamestate_updated_callback,
+		setting_capabilities
 	);
 
 	SPDLOG_INFO("Setting up native game instance without legacy bookmark/history.");

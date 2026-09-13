@@ -1,5 +1,8 @@
+#include <utility>
+#include <string>
 #include "openvic-simulation/GameManager.hpp"
 
+#include "openvic-simulation/core/simulation/SettingCapabilityManifest.hpp"
 #include <cstdint>
 #include <filesystem>
 #include <vector>
@@ -1157,4 +1160,137 @@ TEST_CASE("Legacy days dispatch exactly one cadenced live economy cycle",
 		CHECK(status.final_inventory == fixed_point_t { static_cast<int32_t>(2 * day) });
 	}
 	REQUIRE(manager.end_game_session());
+}
+TEST_CASE(
+	"Native manifest without nutrition-health disables production PopDeps capability",
+	"[convergence][setting-composition][population-capability]"
+) {
+	GameManager manager {
+		[]() {},
+		[]() -> uint64_t { return 0; },
+		[]() -> uint64_t { return 0; }
+	};
+
+	auto const data_root =
+		std::filesystem::path { __FILE__ }.parent_path().parent_path()
+		/ "data" / "native-ruleset-bootstrap";
+
+	REQUIRE(manager.load_native_economy_bootstrap(data_root));
+
+	SettingCapabilityManifest manifest {
+		.package_id = "reference.bronze-age",
+		.capabilities = {
+			"governance.basic",
+			"logistics.land",
+			"population.basic",
+			"production.basic",
+			"trade.physical"
+		}
+	};
+	REQUIRE(manifest.canonicalize());
+
+	NativeInstanceBootstrap bootstrap;
+	bootstrap.setting_capabilities = std::move(manifest);
+
+	REQUIRE(manager.setup_native_instance(std::move(bootstrap)));
+
+	InstanceManager* const instance = manager.get_instance_manager();
+	REQUIRE(instance != nullptr);
+	CHECK_FALSE(
+		instance->is_population_nutrition_health_capability_enabled()
+	);
+}
+
+TEST_CASE(
+	"Native manifest with nutrition-health enables production PopDeps capability",
+	"[convergence][setting-composition][population-capability]"
+) {
+	GameManager manager {
+		[]() {},
+		[]() -> uint64_t { return 0; },
+		[]() -> uint64_t { return 0; }
+	};
+
+	auto const data_root =
+		std::filesystem::path { __FILE__ }.parent_path().parent_path()
+		/ "data" / "native-ruleset-bootstrap";
+
+	REQUIRE(manager.load_native_economy_bootstrap(data_root));
+
+	SettingCapabilityManifest manifest {
+		.package_id = "reference.modern",
+		.capabilities = {
+			"governance.basic",
+			"logistics.land",
+			"population.basic",
+			"population.nutrition-health",
+			"production.basic",
+			"trade.physical"
+		}
+	};
+	REQUIRE(manifest.canonicalize());
+
+	NativeInstanceBootstrap bootstrap;
+	bootstrap.setting_capabilities = std::move(manifest);
+
+	REQUIRE(manager.setup_native_instance(std::move(bootstrap)));
+
+	InstanceManager* const instance = manager.get_instance_manager();
+	REQUIRE(instance != nullptr);
+	CHECK(
+		instance->is_population_nutrition_health_capability_enabled()
+	);
+}
+
+TEST_CASE(
+	"Native setup without capability manifest preserves compatibility behavior",
+	"[convergence][setting-composition][compatibility]"
+) {
+	GameManager manager {
+		[]() {},
+		[]() -> uint64_t { return 0; },
+		[]() -> uint64_t { return 0; }
+	};
+
+	auto const data_root =
+		std::filesystem::path { __FILE__ }.parent_path().parent_path()
+		/ "data" / "native-ruleset-bootstrap";
+
+	REQUIRE(manager.load_native_economy_bootstrap(data_root));
+	REQUIRE(manager.setup_native_instance());
+
+	InstanceManager* const instance = manager.get_instance_manager();
+	REQUIRE(instance != nullptr);
+	CHECK(
+		instance->is_population_nutrition_health_capability_enabled()
+	);
+}
+
+TEST_CASE(
+	"Native setup rejects noncanonical setting capability manifest",
+	"[convergence][setting-composition][validation]"
+) {
+	GameManager manager {
+		[]() {},
+		[]() -> uint64_t { return 0; },
+		[]() -> uint64_t { return 0; }
+	};
+
+	auto const data_root =
+		std::filesystem::path { __FILE__ }.parent_path().parent_path()
+		/ "data" / "native-ruleset-bootstrap";
+
+	REQUIRE(manager.load_native_economy_bootstrap(data_root));
+
+	NativeInstanceBootstrap bootstrap;
+	bootstrap.setting_capabilities = SettingCapabilityManifest {
+		.package_id = "invalid.unsorted",
+		.capabilities = {
+			"production.basic",
+			"population.basic"
+		}
+	};
+
+	CHECK_FALSE(manager.setup_native_instance(std::move(bootstrap)));
+	CHECK(manager.get_instance_manager() == nullptr);
 }

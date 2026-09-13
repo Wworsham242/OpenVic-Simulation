@@ -12,6 +12,7 @@
 #include "openvic-simulation/DefinitionManager.hpp"
 #include "openvic-simulation/gen/commit_info.gen.hpp"
 #include "openvic-simulation/InstanceManager.hpp"
+#include "openvic-simulation/core/simulation/SettingCapabilityManifest.hpp"
 #include "openvic-simulation/misc/GameRulesManager.hpp"
 
 namespace OpenVic {
@@ -22,6 +23,7 @@ namespace OpenVic {
 
 	struct NativeInstanceBootstrap {
 		std::optional<NativePositionBootstrap> position;
+		std::optional<SettingCapabilityManifest> setting_capabilities;
 	};
 
 	struct GameManager {
