@@ -77,3 +77,28 @@ set_target_properties(
     PROPERTIES
         OUTPUT_NAME "openvic-simulation.world-scale-demographics"
 )
+# PROJECT-CONVERGENCE-006A2.3 authoritative economy/production scale harness
+add_executable(
+    openvic-simulation-world-scale-economy
+    world-scale/AuthoritativeEconomyHarness.cpp
+)
+
+target_link_libraries(
+    openvic-simulation-world-scale-economy
+    PRIVATE
+        openvic::simulation
+)
+
+if(WIN32)
+    target_link_libraries(
+        openvic-simulation-world-scale-economy
+        PRIVATE
+            psapi
+    )
+endif()
+
+set_target_properties(
+    openvic-simulation-world-scale-economy
+    PROPERTIES
+        OUTPUT_NAME "openvic-simulation.world-scale-economy"
+)
