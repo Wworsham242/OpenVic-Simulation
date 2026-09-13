@@ -51,3 +51,29 @@ set_target_properties(
         OUTPUT_NAME "openvic-simulation.world-scale"
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/$<CONFIG>"
 )
+
+# PROJECT-CONVERGENCE-006A2.2 authoritative demographic scale harness
+add_executable(
+    openvic-simulation-world-scale-demographics
+    world-scale/AuthoritativeDemographicHarness.cpp
+)
+
+target_link_libraries(
+    openvic-simulation-world-scale-demographics
+    PRIVATE
+        openvic::simulation
+)
+
+if(WIN32)
+    target_link_libraries(
+        openvic-simulation-world-scale-demographics
+        PRIVATE
+            psapi
+    )
+endif()
+
+set_target_properties(
+    openvic-simulation-world-scale-demographics
+    PROPERTIES
+        OUTPUT_NAME "openvic-simulation.world-scale-demographics"
+)
