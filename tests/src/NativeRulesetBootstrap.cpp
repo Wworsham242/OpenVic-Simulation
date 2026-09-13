@@ -1789,3 +1789,120 @@ TEST_CASE(
 		) != nullptr
 	);
 }
+TEST_CASE(
+	"Authoritative economy provenance produces delayed actor knowledge",
+	"[convergence][actor-perception][economy-producer]"
+) {
+	GameManager manager {
+		[]() {},
+		[]() -> uint64_t { return 0; },
+		[]() -> uint64_t { return 0; }
+	};
+
+	auto const data_root =
+		std::filesystem::path { __FILE__ }.parent_path().parent_path()
+		/ "data" / "native-ruleset-bootstrap";
+
+	REQUIRE(manager.load_native_economy_bootstrap(data_root));
+	REQUIRE(manager.setup_native_instance());
+
+	InstanceManager* const instance = manager.get_instance_manager();
+	REQUIRE(instance != nullptr);
+
+	REQUIRE(
+		instance->configure_live_economy_observation_delivery(
+			LiveEconomyObservationPolicy {
+				.recipient_actor_id = "cabinet.economic-analysis",
+				.delivery_delay_ticks = 24
+			}
+		)
+	);
+
+	REQUIRE(instance->start_game_session());
+
+	instance->force_tick_and_update();
+	CHECK(instance->get_simulation_time() == SimTime::from_ticks(24));
+
+	auto const cycle_one = instance->get_live_economy_provenance();
+	REQUIRE(cycle_one.has_value());
+	REQUIRE(cycle_one->due_time.has_value());
+	CHECK(*cycle_one->due_time == SimTime::from_ticks(24));
+
+	bool const authoritative_transaction_limited =
+		cycle_one->upstream_market.transaction_limited();
+	std::string const authoritative_subject =
+		cycle_one->intermediate_good_id;
+
+	CHECK(
+		instance->get_actor_knowledge(
+			"cabinet.economic-analysis",
+			"economy.market.transaction-limited",
+			authoritative_subject
+		) == nullptr
+	);
+	CHECK(instance->get_pending_actor_report_count() == 1);
+
+	instance->force_tick_and_update();
+	CHECK(instance->get_simulation_time() == SimTime::from_ticks(48));
+
+	ActorKnowledgeRecord const* const perceived =
+		instance->get_actor_knowledge(
+			"cabinet.economic-analysis",
+			"economy.market.transaction-limited",
+			authoritative_subject
+		);
+
+	REQUIRE(perceived != nullptr);
+	CHECK(perceived->observed_at == SimTime::from_ticks(24));
+	CHECK(perceived->received_at == SimTime::from_ticks(48));
+	REQUIRE(perceived->payload.size() == 1);
+	CHECK(
+		perceived->payload[0]
+			== static_cast<uint8_t>(
+				authoritative_transaction_limited ? 1 : 0
+			)
+	);
+	CHECK(perceived->integrity == ObservationIntegrity::DIRECT);
+	CHECK(perceived->confidence_basis_points == 10'000);
+
+	CHECK(instance->get_pending_actor_report_count() == 1);
+
+	CHECK(
+		instance->get_actor_knowledge(
+			"cabinet.foreign-affairs",
+			"economy.market.transaction-limited",
+			authoritative_subject
+		) == nullptr
+	);
+}
+
+TEST_CASE(
+	"Economy observation delivery is opt-in and does not alter economy authority",
+	"[convergence][actor-perception][economy-producer]"
+) {
+	GameManager manager {
+		[]() {},
+		[]() -> uint64_t { return 0; },
+		[]() -> uint64_t { return 0; }
+	};
+
+	auto const data_root =
+		std::filesystem::path { __FILE__ }.parent_path().parent_path()
+		/ "data" / "native-ruleset-bootstrap";
+
+	REQUIRE(manager.load_native_economy_bootstrap(data_root));
+	REQUIRE(manager.setup_native_instance());
+
+	InstanceManager* const instance = manager.get_instance_manager();
+	REQUIRE(instance != nullptr);
+	REQUIRE(instance->start_game_session());
+
+	instance->force_tick_and_update();
+
+	auto const provenance = instance->get_live_economy_provenance();
+	REQUIRE(provenance.has_value());
+
+	CHECK(instance->get_pending_actor_report_count() == 0);
+	CHECK(instance->get_actor_knowledge_record_count() == 0);
+	CHECK(instance->get_live_economy_status().completed_daily_ticks == 1);
+}

@@ -19,6 +19,7 @@
 #include "openvic-simulation/diplomacy/CountryRelation.hpp"
 #include "openvic-simulation/economy/GoodInstance.hpp"
 #include "openvic-simulation/economy/LiveEconomyRuntime.hpp"
+#include "openvic-simulation/economy/LiveEconomyObservation.hpp"
 #include "openvic-simulation/economy/production/ArtisanalProducerDeps.hpp"
 #include "openvic-simulation/economy/production/ResourceGatheringOperationDeps.hpp"
 #include "openvic-simulation/economy/trading/MarketInstance.hpp"
@@ -57,6 +58,7 @@ namespace OpenVic {
 		MarketInstance PROPERTY_REF(market_instance);
 		std::unique_ptr<LiveEconomyRuntime> live_economy_runtime;
 		bool enable_live_aggregate_production_chain = true;
+		std::optional<LiveEconomyObservationPolicy> live_economy_observation_policy;
 
 		ArtisanalProducerDeps artisanal_producer_deps;
 		CountryInstanceDeps country_instance_deps;
@@ -156,6 +158,23 @@ namespace OpenVic {
 
 				[[nodiscard]] bool is_live_aggregate_production_chain_enabled() const {
 			return enable_live_aggregate_production_chain;
+		}
+
+		[[nodiscard]] bool configure_live_economy_observation_delivery(
+			LiveEconomyObservationPolicy policy
+		) {
+			if (is_game_session_started() || !policy.is_valid()) {
+				return false;
+			}
+
+			live_economy_observation_policy = std::move(policy);
+			return true;
+		}
+
+		void disable_live_economy_observation_delivery() {
+			if (!is_game_session_started()) {
+				live_economy_observation_policy.reset();
+			}
 		}
 
 [[nodiscard]] LiveEconomyStatus get_live_economy_status() const {

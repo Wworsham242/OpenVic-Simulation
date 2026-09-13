@@ -254,6 +254,32 @@ return std::nullopt;
 },
 clear_market
 );
+
+/*
+ * PROJECT-CONVERGENCE-006A4.3:
+ * the authoritative economy owns observation production. Perception only
+ * receives the completed report envelope and never reads economy internals.
+ *
+ * The legacy driver advances exactly one daily cadence boundary above, so the
+ * latest completed provenance corresponds to this tick's authoritative cycle.
+ */
+if (live_economy_observation_policy.has_value()) {
+	auto const& provenance =
+		live_economy_runtime->get_latest_provenance();
+
+	if (provenance.has_value()) {
+		auto report = make_live_economy_transaction_limit_report(
+			*provenance,
+			*live_economy_observation_policy
+		);
+
+		if (report.has_value()) {
+			(void)actor_perception_runtime.submit_report(
+				std::move(*report)
+			);
+		}
+	}
+}
 } else {
 (void)map_instance.allocate_employment_phase();
 map_instance.finish_rgo_production();
