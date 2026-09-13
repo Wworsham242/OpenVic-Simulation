@@ -28,3 +28,26 @@ set_target_properties(
 # No add_test: benchmarks are built in CI for compile coverage but run
 # manually (they take real time and their numbers are meaningless on shared
 # runners).
+
+
+# PROJECT-CONVERGENCE-006A2 world-scale harness.
+# Kept separate from the microbenchmark/snitch executable so it can own its
+# command line, emit machine-readable JSON, and run large workloads manually.
+add_executable(
+    openvic-simulation-world-scale
+    world-scale/WorldScaleHarness.cpp
+)
+target_link_libraries(
+    openvic-simulation-world-scale
+    PRIVATE
+        openvic::simulation
+)
+if(WIN32)
+    target_link_libraries(openvic-simulation-world-scale PRIVATE psapi)
+endif()
+set_target_properties(
+    openvic-simulation-world-scale
+    PROPERTIES
+        OUTPUT_NAME "openvic-simulation.world-scale"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/$<CONFIG>"
+)
