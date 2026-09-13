@@ -93,23 +93,37 @@ public:
 		std::string_view edge_id,
 		bool open
 	) {
-		for (LogisticsGraphEdge& edge : edges) {
-			if (edge.edge_id == edge_id) {
-				edge.leg.open = open;
-				return true;
+		auto const it = std::lower_bound(
+			edges.begin(),
+			edges.end(),
+			edge_id,
+			[](LogisticsGraphEdge const& edge, std::string_view value) {
+				return edge.edge_id < value;
 			}
+		);
+
+		if (it == edges.end() || it->edge_id != edge_id) {
+			return false;
 		}
-		return false;
+
+		it->leg.open = open;
+		return true;
 	}
 	[[nodiscard]] fixed_point_t get_edge_effective_capacity(
 		std::string_view edge_id
 	) const {
-		for (LogisticsGraphEdge const& edge : edges) {
-			if (edge.edge_id == edge_id) {
-				return edge.leg.calculate_effective_capacity();
+		auto const it = std::lower_bound(
+			edges.begin(),
+			edges.end(),
+			edge_id,
+			[](LogisticsGraphEdge const& edge, std::string_view value) {
+				return edge.edge_id < value;
 			}
-		}
-		return fixed_point_t::_0;
+		);
+
+		return it != edges.end() && it->edge_id == edge_id
+			? it->leg.calculate_effective_capacity()
+			: fixed_point_t::_0;
 	}
 
 	[[nodiscard]] LogisticsGraphPath find_route_excluding(
@@ -310,9 +324,34 @@ limiting_allocation
 		// consume their shared-edge capacity. Residual rerouting is processed
 		// in deterministic flow-id order.
 		std::vector<std::pair<std::string, fixed_point_t>> remaining_capacity;
-		remaining_capacity.reserve(edges.size());
 
-		for (LogisticsGraphEdge const& edge : edges) {
+		// Residual capacity is scratch state, not authority. Track only edges
+		// touched by primary allocations; untouched edges retain their full
+		// authoritative capacity in the graph and are queried lazily below.
+		std::vector<std::string> used_edge_ids;
+
+		for (LogisticsGraphFlowAllocation const& allocation : allocations) {
+			if (!allocation.path.found || allocation.allocated <= fixed_point_t::_0) {
+				continue;
+			}
+
+			for (std::string const& edge_id : allocation.path.edge_ids) {
+				if (
+					std::find(
+						used_edge_ids.begin(),
+						used_edge_ids.end(),
+						edge_id
+					) == used_edge_ids.end()
+				) {
+					used_edge_ids.push_back(edge_id);
+				}
+			}
+		}
+
+		std::sort(used_edge_ids.begin(), used_edge_ids.end());
+		remaining_capacity.reserve(used_edge_ids.size());
+
+		for (std::string const& edge_id : used_edge_ids) {
 			fixed_point_t used = 0;
 
 			for (LogisticsGraphFlowAllocation const& allocation : allocations) {
@@ -321,7 +360,7 @@ limiting_allocation
 					std::find(
 						allocation.path.edge_ids.begin(),
 						allocation.path.edge_ids.end(),
-						edge.edge_id
+						edge_id
 					) != allocation.path.edge_ids.end()
 				) {
 					used += allocation.allocated;
@@ -329,10 +368,10 @@ limiting_allocation
 			}
 
 			remaining_capacity.push_back({
-				edge.edge_id,
+				edge_id,
 				std::max(
 					fixed_point_t::_0,
-					edge.leg.calculate_effective_capacity() - used
+					get_edge_effective_capacity(edge_id) - used
 				)
 			});
 		}
@@ -404,7 +443,7 @@ limiting_allocation
 					alternate_capacity,
 					it != remaining_capacity.end()
 						? it->second
-						: fixed_point_t::_0
+						: get_edge_effective_capacity(edge_id)
 				);
 			}
 
@@ -413,11 +452,24 @@ limiting_allocation
 			}
 
 			for (std::string const& edge_id : alternate.edge_ids) {
-				for (auto& item : remaining_capacity) {
-					if (item.first == edge_id) {
-						item.second -= alternate_capacity;
-						break;
+				auto it = std::find_if(
+					remaining_capacity.begin(),
+					remaining_capacity.end(),
+					[&edge_id](auto const& item) {
+						return item.first == edge_id;
 					}
+				);
+
+				if (it != remaining_capacity.end()) {
+					it->second -= alternate_capacity;
+				} else {
+					remaining_capacity.push_back({
+						edge_id,
+						std::max(
+							fixed_point_t::_0,
+							get_edge_effective_capacity(edge_id) - alternate_capacity
+						)
+					});
 				}
 			}
 

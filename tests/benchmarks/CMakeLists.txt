@@ -102,3 +102,28 @@ set_target_properties(
     PROPERTIES
         OUTPUT_NAME "openvic-simulation.world-scale-economy"
 )
+# PROJECT-CONVERGENCE-006A2.4 authoritative logistics/network scale harness
+add_executable(
+    openvic-simulation-world-scale-logistics
+    world-scale/AuthoritativeLogisticsHarness.cpp
+)
+
+target_link_libraries(
+    openvic-simulation-world-scale-logistics
+    PRIVATE
+        openvic::simulation
+)
+
+if(WIN32)
+    target_link_libraries(
+        openvic-simulation-world-scale-logistics
+        PRIVATE
+            psapi
+    )
+endif()
+
+set_target_properties(
+    openvic-simulation-world-scale-logistics
+    PROPERTIES
+        OUTPUT_NAME "openvic-simulation.world-scale-logistics"
+)
