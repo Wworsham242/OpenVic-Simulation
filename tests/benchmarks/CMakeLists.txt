@@ -127,3 +127,28 @@ set_target_properties(
     PROPERTIES
         OUTPUT_NAME "openvic-simulation.world-scale-logistics"
 )
+# PROJECT-CONVERGENCE-006A2.5 authoritative persistence/replay scale harness
+add_executable(
+    openvic-simulation-world-scale-persistence
+    world-scale/AuthoritativePersistenceHarness.cpp
+)
+
+target_link_libraries(
+    openvic-simulation-world-scale-persistence
+    PRIVATE
+        openvic::simulation
+)
+
+if(WIN32)
+    target_link_libraries(
+        openvic-simulation-world-scale-persistence
+        PRIVATE
+            psapi
+    )
+endif()
+
+set_target_properties(
+    openvic-simulation-world-scale-persistence
+    PROPERTIES
+        OUTPUT_NAME "openvic-simulation.world-scale-persistence"
+)
