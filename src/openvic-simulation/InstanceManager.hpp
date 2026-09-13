@@ -20,6 +20,7 @@
 #include "openvic-simulation/economy/GoodInstance.hpp"
 #include "openvic-simulation/economy/LiveEconomyRuntime.hpp"
 #include "openvic-simulation/economy/LiveEconomyObservation.hpp"
+#include "openvic-simulation/environment/ProvinceEnvironmentalObservation.hpp"
 #include "openvic-simulation/economy/production/ArtisanalProducerDeps.hpp"
 #include "openvic-simulation/economy/production/ResourceGatheringOperationDeps.hpp"
 #include "openvic-simulation/economy/trading/MarketInstance.hpp"
@@ -128,7 +129,25 @@ namespace OpenVic {
 
 		bool set_today_and_update(Date new_today);
 
-				[[nodiscard]] std::optional<uint64_t> submit_actor_observation_report(
+						[[nodiscard]] std::optional<uint64_t>
+		submit_province_environmental_observation(
+			std::string province_id,
+			ProvinceEnvironmentalState const& environment,
+			ProvinceEnvironmentalObservationPolicy const& policy
+		) {
+			auto report = make_province_water_availability_report(
+				std::move(province_id),
+				environment,
+				simulation_timeline.current_time(),
+				policy
+			);
+
+			return report.has_value()
+				? actor_perception_runtime.submit_report(std::move(*report))
+				: std::nullopt;
+		}
+
+[[nodiscard]] std::optional<uint64_t> submit_actor_observation_report(
 			ObservationReport report
 		) {
 			return actor_perception_runtime.submit_report(std::move(report));

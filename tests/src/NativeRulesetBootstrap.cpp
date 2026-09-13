@@ -1906,3 +1906,153 @@ TEST_CASE(
 	CHECK(instance->get_actor_knowledge_record_count() == 0);
 	CHECK(instance->get_live_economy_status().completed_daily_ticks == 1);
 }
+TEST_CASE(
+	"Environment domain produces delayed province knowledge",
+	"[convergence][actor-perception][environment-producer]"
+) {
+	GameManager manager {
+		[]() {},
+		[]() -> uint64_t { return 0; },
+		[]() -> uint64_t { return 0; }
+	};
+
+	auto const data_root =
+		std::filesystem::path { __FILE__ }.parent_path().parent_path()
+		/ "data" / "native-ruleset-bootstrap";
+
+	REQUIRE(manager.load_native_economy_bootstrap(data_root));
+	REQUIRE(manager.setup_native_instance());
+
+	InstanceManager* const instance = manager.get_instance_manager();
+	REQUIRE(instance != nullptr);
+
+	ProvinceEnvironmentalState const authoritative_environment {
+		fixed_point_t::parse_raw(fixed_point_t::_1.get_raw_value() * 5 / 8)
+	};
+
+	auto const sequence =
+		instance->submit_province_environmental_observation(
+			"province.test-17",
+			authoritative_environment,
+			ProvinceEnvironmentalObservationPolicy {
+				.recipient_actor_id = "agriculture.ministry",
+				.delivery_delay_ticks = 48
+			}
+		);
+
+	REQUIRE(sequence.has_value());
+
+	CHECK(
+		instance->get_actor_knowledge(
+			"agriculture.ministry",
+			"environment.water-availability",
+			"province.test-17"
+		) == nullptr
+	);
+
+	REQUIRE(instance->start_game_session());
+
+	instance->force_tick_and_update();
+	CHECK(instance->get_simulation_time() == SimTime::from_ticks(24));
+	CHECK(
+		instance->get_actor_knowledge(
+			"agriculture.ministry",
+			"environment.water-availability",
+			"province.test-17"
+		) == nullptr
+	);
+
+	instance->force_tick_and_update();
+	CHECK(instance->get_simulation_time() == SimTime::from_ticks(48));
+
+	ActorKnowledgeRecord const* const perceived =
+		instance->get_actor_knowledge(
+			"agriculture.ministry",
+			"environment.water-availability",
+			"province.test-17"
+		);
+
+	REQUIRE(perceived != nullptr);
+	CHECK(perceived->observed_at == SimTime::from_ticks(0));
+	CHECK(perceived->received_at == SimTime::from_ticks(48));
+	CHECK(perceived->integrity == ObservationIntegrity::DIRECT);
+	CHECK(perceived->confidence_basis_points == 10'000);
+
+	auto const expected_raw =
+		authoritative_environment.get_water_availability().get_raw_value();
+
+	REQUIRE(perceived->payload.size() == sizeof(expected_raw));
+
+	uint64_t reconstructed = 0;
+	for (std::size_t i = 0; i < perceived->payload.size(); ++i) {
+		reconstructed |=
+			static_cast<uint64_t>(perceived->payload[i]) << (i * 8);
+	}
+
+	CHECK(
+		reconstructed
+			== static_cast<uint64_t>(expected_raw)
+	);
+
+	CHECK(
+		instance->get_actor_knowledge(
+			"foreign.ministry",
+			"environment.water-availability",
+			"province.test-17"
+		) == nullptr
+	);
+
+	/* The domain value itself remains unchanged. */
+	CHECK(
+		authoritative_environment.get_water_availability()
+			== fixed_point_t::parse_raw(fixed_point_t::_1.get_raw_value() * 5 / 8)
+	);
+}
+
+TEST_CASE(
+	"Environment observation adapter rejects invalid envelopes",
+	"[convergence][actor-perception][environment-producer]"
+) {
+	ProvinceEnvironmentalState const environment {
+		fixed_point_t::parse_raw(fixed_point_t::_1.get_raw_value() / 2)
+	};
+
+	auto const no_actor =
+		make_province_water_availability_report(
+			"province.1",
+			environment,
+			SimTime::from_ticks(0),
+			ProvinceEnvironmentalObservationPolicy {
+				.recipient_actor_id = "",
+				.delivery_delay_ticks = 24
+			}
+		);
+
+	CHECK_FALSE(no_actor.has_value());
+
+	auto const no_subject =
+		make_province_water_availability_report(
+			"",
+			environment,
+			SimTime::from_ticks(0),
+			ProvinceEnvironmentalObservationPolicy {
+				.recipient_actor_id = "actor",
+				.delivery_delay_ticks = 24
+			}
+		);
+
+	CHECK_FALSE(no_subject.has_value());
+
+	auto const negative_delay =
+		make_province_water_availability_report(
+			"province.1",
+			environment,
+			SimTime::from_ticks(0),
+			ProvinceEnvironmentalObservationPolicy {
+				.recipient_actor_id = "actor",
+				.delivery_delay_ticks = -1
+			}
+		);
+
+	CHECK_FALSE(negative_delay.has_value());
+}
