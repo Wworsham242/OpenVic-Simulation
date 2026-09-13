@@ -201,7 +201,17 @@ void InstanceManager::tick() {
 		return;
 	}
 
-	today++;
+
+	/*
+	 * PROJECT-CONVERGENCE-006A4.2:
+	 * report delivery is keyed to authoritative simulation time but remains
+	 * outside authoritative world state. Deliveries due at the newly advanced
+	 * time become available before domain work for this legacy day.
+	 */
+	(void)actor_perception_runtime.deliver_due(
+		simulation_timeline.current_time()
+	);
+today++;
 
 	SPDLOG_INFO("Tick: {}", today);
 

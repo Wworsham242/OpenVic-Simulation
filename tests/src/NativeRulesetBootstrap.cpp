@@ -1663,3 +1663,129 @@ TEST_CASE(
 	);
 	CHECK_FALSE(instance->get_live_economy_status().configured);
 }
+TEST_CASE(
+	"Production instance delivers actor reports on simulation time",
+	"[convergence][actor-perception][integration]"
+) {
+	GameManager manager {
+		[]() {},
+		[]() -> uint64_t { return 0; },
+		[]() -> uint64_t { return 0; }
+	};
+
+	auto const data_root =
+		std::filesystem::path { __FILE__ }.parent_path().parent_path()
+		/ "data" / "native-ruleset-bootstrap";
+
+	REQUIRE(manager.load_native_economy_bootstrap(data_root));
+	REQUIRE(manager.setup_native_instance());
+
+	InstanceManager* const instance = manager.get_instance_manager();
+	REQUIRE(instance != nullptr);
+
+	CHECK(instance->get_simulation_time() == SimTime::from_ticks(0));
+
+	ObservationReport report {
+		.recipient_actor_id = "cabinet.analysis",
+		.source_id = "provincial.office",
+		.fact_type = "harvest.output",
+		.subject_id = "province.17",
+		.observed_at = SimTime::from_ticks(0),
+		.deliver_at = SimTime::from_ticks(24),
+		.payload = { 0x2A },
+		.integrity = ObservationIntegrity::ESTIMATED,
+		.confidence_basis_points = 7'500
+	};
+
+	REQUIRE(
+		instance->submit_actor_observation_report(std::move(report)).has_value()
+	);
+	CHECK(instance->get_pending_actor_report_count() == 1);
+	CHECK(
+		instance->get_actor_knowledge(
+			"cabinet.analysis",
+			"harvest.output",
+			"province.17"
+		) == nullptr
+	);
+
+	REQUIRE(instance->start_game_session());
+	instance->force_tick_and_update();
+
+	CHECK(instance->get_simulation_time() == SimTime::from_ticks(24));
+	CHECK(instance->get_pending_actor_report_count() == 0);
+
+	ActorKnowledgeRecord const* const knowledge =
+		instance->get_actor_knowledge(
+			"cabinet.analysis",
+			"harvest.output",
+			"province.17"
+		);
+
+	REQUIRE(knowledge != nullptr);
+	CHECK(knowledge->observed_at == SimTime::from_ticks(0));
+	CHECK(knowledge->received_at == SimTime::from_ticks(24));
+	CHECK(knowledge->payload == std::vector<uint8_t> { 0x2A });
+	CHECK(knowledge->integrity == ObservationIntegrity::ESTIMATED);
+}
+
+TEST_CASE(
+	"Production instance keeps future reports pending across ticks",
+	"[convergence][actor-perception][integration]"
+) {
+	GameManager manager {
+		[]() {},
+		[]() -> uint64_t { return 0; },
+		[]() -> uint64_t { return 0; }
+	};
+
+	auto const data_root =
+		std::filesystem::path { __FILE__ }.parent_path().parent_path()
+		/ "data" / "native-ruleset-bootstrap";
+
+	REQUIRE(manager.load_native_economy_bootstrap(data_root));
+	REQUIRE(manager.setup_native_instance());
+
+	InstanceManager* const instance = manager.get_instance_manager();
+	REQUIRE(instance != nullptr);
+
+	ObservationReport report {
+		.recipient_actor_id = "palace",
+		.source_id = "messenger.frontier",
+		.fact_type = "border.condition",
+		.subject_id = "frontier.east",
+		.observed_at = SimTime::from_ticks(0),
+		.deliver_at = SimTime::from_ticks(72),
+		.payload = { 1 },
+		.integrity = ObservationIntegrity::DIRECT,
+		.confidence_basis_points = 8'000
+	};
+
+	REQUIRE(
+		instance->submit_actor_observation_report(std::move(report)).has_value()
+	);
+
+	REQUIRE(instance->start_game_session());
+
+	instance->force_tick_and_update();
+	CHECK(instance->get_simulation_time() == SimTime::from_ticks(24));
+	CHECK(instance->get_pending_actor_report_count() == 1);
+	CHECK(
+		instance->get_actor_knowledge(
+			"palace", "border.condition", "frontier.east"
+		) == nullptr
+	);
+
+	instance->force_tick_and_update();
+	CHECK(instance->get_simulation_time() == SimTime::from_ticks(48));
+	CHECK(instance->get_pending_actor_report_count() == 1);
+
+	instance->force_tick_and_update();
+	CHECK(instance->get_simulation_time() == SimTime::from_ticks(72));
+	CHECK(instance->get_pending_actor_report_count() == 0);
+	REQUIRE(
+		instance->get_actor_knowledge(
+			"palace", "border.condition", "frontier.east"
+		) != nullptr
+	);
+}

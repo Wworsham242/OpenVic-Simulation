@@ -8,6 +8,7 @@
 #include "openvic-simulation/console/ConsoleInstance.hpp"
 #include "openvic-simulation/core/memory/Vector.hpp"
 #include "openvic-simulation/core/simulation/AuthorityRegistry.hpp"
+#include "openvic-simulation/core/simulation/ActorPerceptionRuntime.hpp"
 #include "openvic-simulation/core/simulation/CommandTargetIdentity.hpp"
 #include "openvic-simulation/core/simulation/LegacyMobiliseCommand.hpp"
 #include "openvic-simulation/core/simulation/LiveCommandTimelineSnapshot.hpp"
@@ -79,6 +80,7 @@ namespace OpenVic {
 		// FOUNDATION-009: live generalized command-admission state.
 		AuthorityRegistry authority_registry;
 		OrderedCommandRuntime ordered_command_runtime;
+	ActorPerceptionRuntime actor_perception_runtime;
 		CommandAdmissionRuntime command_admission_runtime;
 		ConsoleInstance PROPERTY_REF(console_instance);
 
@@ -124,7 +126,31 @@ namespace OpenVic {
 
 		bool set_today_and_update(Date new_today);
 
-		[[nodiscard]] SimTime get_simulation_time() const {
+				[[nodiscard]] std::optional<uint64_t> submit_actor_observation_report(
+			ObservationReport report
+		) {
+			return actor_perception_runtime.submit_report(std::move(report));
+		}
+
+		[[nodiscard]] ActorKnowledgeRecord const* get_actor_knowledge(
+			std::string_view actor_id,
+			std::string_view fact_type,
+			std::string_view subject_id
+		) const {
+			return actor_perception_runtime.find_knowledge(
+				actor_id, fact_type, subject_id
+			);
+		}
+
+		[[nodiscard]] std::size_t get_pending_actor_report_count() const {
+			return actor_perception_runtime.pending_report_count();
+		}
+
+		[[nodiscard]] std::size_t get_actor_knowledge_record_count() const {
+			return actor_perception_runtime.knowledge_record_count();
+		}
+
+[[nodiscard]] SimTime get_simulation_time() const {
 			return simulation_timeline.current_time();
 		}
 
