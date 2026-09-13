@@ -98,6 +98,10 @@ InstanceManager::InstanceManager(
 		setting_capabilities == nullptr
 			|| setting_capabilities->has("population.nutrition-health")
 	},
+	enable_live_aggregate_production_chain {
+		setting_capabilities == nullptr
+			|| setting_capabilities->has("economy.aggregate-production-chain")
+	},
 	rgo_deps {
 		market_instance,
 		new_definition_manager.get_modifier_manager().get_modifier_effect_cache(),
@@ -305,7 +309,11 @@ bool InstanceManager::setup() {
 	LiveEconomyScenarioDefinition const* const live_scenario =
 		definition_manager.get_economy_manager().get_live_economy_scenario();
 
-	if (live_scenario != nullptr && live_scenario->is_valid()) {
+	if (
+		enable_live_aggregate_production_chain
+		&& live_scenario != nullptr
+		&& live_scenario->is_valid()
+	) {
 		live_economy_runtime = std::make_unique<LiveEconomyRuntime>(
 			game_rules_manager,
 			good_instance_manager,

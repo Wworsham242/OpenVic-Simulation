@@ -55,6 +55,7 @@ namespace OpenVic {
 		GoodInstanceManager PROPERTY_REF(good_instance_manager);
 		MarketInstance PROPERTY_REF(market_instance);
 		std::unique_ptr<LiveEconomyRuntime> live_economy_runtime;
+		bool enable_live_aggregate_production_chain = true;
 
 		ArtisanalProducerDeps artisanal_producer_deps;
 		CountryInstanceDeps country_instance_deps;
@@ -127,7 +128,11 @@ namespace OpenVic {
 			return simulation_timeline.current_time();
 		}
 
-		[[nodiscard]] LiveEconomyStatus get_live_economy_status() const {
+				[[nodiscard]] bool is_live_aggregate_production_chain_enabled() const {
+			return enable_live_aggregate_production_chain;
+		}
+
+[[nodiscard]] LiveEconomyStatus get_live_economy_status() const {
 			return live_economy_runtime != nullptr
 				? live_economy_runtime->get_status()
 				: LiveEconomyStatus {};

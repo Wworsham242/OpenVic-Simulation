@@ -1294,3 +1294,188 @@ TEST_CASE(
 	CHECK_FALSE(manager.setup_native_instance(std::move(bootstrap)));
 	CHECK(manager.get_instance_manager() == nullptr);
 }
+TEST_CASE(
+	"Setting manifest can omit aggregate production chain while preserving base economy",
+	"[convergence][setting-composition][economy-capability]"
+) {
+	GameManager manager {
+		[]() {},
+		[]() -> uint64_t { return 0; },
+		[]() -> uint64_t { return 0; }
+	};
+
+	auto const data_root =
+		std::filesystem::path { __FILE__ }.parent_path().parent_path()
+		/ "data" / "native-ruleset-bootstrap";
+
+	REQUIRE(manager.load_native_economy_bootstrap(data_root));
+
+	SettingCapabilityManifest manifest {
+		.package_id = "reference.minimal-production",
+		.capabilities = {
+			"governance.basic",
+			"logistics.land",
+			"population.basic",
+			"production.basic",
+			"trade.physical"
+		}
+	};
+	REQUIRE(manifest.canonicalize());
+
+	NativeInstanceBootstrap bootstrap;
+	bootstrap.setting_capabilities = std::move(manifest);
+	REQUIRE(manager.setup_native_instance(std::move(bootstrap)));
+
+	InstanceManager* const instance = manager.get_instance_manager();
+	REQUIRE(instance != nullptr);
+	CHECK_FALSE(instance->is_live_aggregate_production_chain_enabled());
+	CHECK_FALSE(instance->get_live_economy_status().configured);
+	CHECK(instance->get_simulation_time() == SimTime { 0 });
+}
+
+TEST_CASE(
+	"Setting manifest can enable aggregate production chain independently",
+	"[convergence][setting-composition][economy-capability]"
+) {
+	GameManager manager {
+		[]() {},
+		[]() -> uint64_t { return 0; },
+		[]() -> uint64_t { return 0; }
+	};
+
+	auto const data_root =
+		std::filesystem::path { __FILE__ }.parent_path().parent_path()
+		/ "data" / "native-ruleset-bootstrap";
+
+	REQUIRE(manager.load_native_economy_bootstrap(data_root));
+
+	SettingCapabilityManifest manifest {
+		.package_id = "reference.aggregate-production",
+		.capabilities = {
+			"economy.aggregate-production-chain",
+			"governance.basic",
+			"logistics.land",
+			"population.basic",
+			"production.basic",
+			"trade.physical"
+		}
+	};
+	REQUIRE(manifest.canonicalize());
+
+	NativeInstanceBootstrap bootstrap;
+	bootstrap.setting_capabilities = std::move(manifest);
+	REQUIRE(manager.setup_native_instance(std::move(bootstrap)));
+
+	InstanceManager* const instance = manager.get_instance_manager();
+	REQUIRE(instance != nullptr);
+	CHECK(instance->is_live_aggregate_production_chain_enabled());
+
+	LiveEconomyStatus const status = instance->get_live_economy_status();
+	CHECK(status.configured);
+	CHECK(status.completed_daily_ticks == 0);
+}
+
+TEST_CASE(
+	"Nutrition capability can be enabled while aggregate economy is omitted",
+	"[convergence][setting-composition][cross-domain]"
+) {
+	GameManager manager {
+		[]() {},
+		[]() -> uint64_t { return 0; },
+		[]() -> uint64_t { return 0; }
+	};
+
+	auto const data_root =
+		std::filesystem::path { __FILE__ }.parent_path().parent_path()
+		/ "data" / "native-ruleset-bootstrap";
+
+	REQUIRE(manager.load_native_economy_bootstrap(data_root));
+
+	SettingCapabilityManifest manifest {
+		.package_id = "reference.population-rich-economy-minimal",
+		.capabilities = {
+			"governance.basic",
+			"logistics.land",
+			"population.basic",
+			"population.nutrition-health",
+			"production.basic",
+			"trade.physical"
+		}
+	};
+	REQUIRE(manifest.canonicalize());
+
+	NativeInstanceBootstrap bootstrap;
+	bootstrap.setting_capabilities = std::move(manifest);
+	REQUIRE(manager.setup_native_instance(std::move(bootstrap)));
+
+	InstanceManager* const instance = manager.get_instance_manager();
+	REQUIRE(instance != nullptr);
+
+	CHECK(instance->is_population_nutrition_health_capability_enabled());
+	CHECK_FALSE(instance->is_live_aggregate_production_chain_enabled());
+	CHECK_FALSE(instance->get_live_economy_status().configured);
+}
+
+TEST_CASE(
+	"Aggregate economy capability can be enabled while nutrition history is omitted",
+	"[convergence][setting-composition][cross-domain]"
+) {
+	GameManager manager {
+		[]() {},
+		[]() -> uint64_t { return 0; },
+		[]() -> uint64_t { return 0; }
+	};
+
+	auto const data_root =
+		std::filesystem::path { __FILE__ }.parent_path().parent_path()
+		/ "data" / "native-ruleset-bootstrap";
+
+	REQUIRE(manager.load_native_economy_bootstrap(data_root));
+
+	SettingCapabilityManifest manifest {
+		.package_id = "reference.economy-rich-population-minimal",
+		.capabilities = {
+			"economy.aggregate-production-chain",
+			"governance.basic",
+			"logistics.land",
+			"population.basic",
+			"production.basic",
+			"trade.physical"
+		}
+	};
+	REQUIRE(manifest.canonicalize());
+
+	NativeInstanceBootstrap bootstrap;
+	bootstrap.setting_capabilities = std::move(manifest);
+	REQUIRE(manager.setup_native_instance(std::move(bootstrap)));
+
+	InstanceManager* const instance = manager.get_instance_manager();
+	REQUIRE(instance != nullptr);
+
+	CHECK_FALSE(instance->is_population_nutrition_health_capability_enabled());
+	CHECK(instance->is_live_aggregate_production_chain_enabled());
+	CHECK(instance->get_live_economy_status().configured);
+}
+
+TEST_CASE(
+	"No manifest preserves aggregate economy compatibility behavior",
+	"[convergence][setting-composition][economy-compatibility]"
+) {
+	GameManager manager {
+		[]() {},
+		[]() -> uint64_t { return 0; },
+		[]() -> uint64_t { return 0; }
+	};
+
+	auto const data_root =
+		std::filesystem::path { __FILE__ }.parent_path().parent_path()
+		/ "data" / "native-ruleset-bootstrap";
+
+	REQUIRE(manager.load_native_economy_bootstrap(data_root));
+	REQUIRE(manager.setup_native_instance());
+
+	InstanceManager* const instance = manager.get_instance_manager();
+	REQUIRE(instance != nullptr);
+	CHECK(instance->is_live_aggregate_production_chain_enabled());
+	CHECK(instance->get_live_economy_status().configured);
+}
