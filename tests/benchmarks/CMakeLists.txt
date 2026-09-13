@@ -152,3 +152,20 @@ set_target_properties(
     PROPERTIES
         OUTPUT_NAME "openvic-simulation.world-scale-persistence"
 )
+# PROJECT-CONVERGENCE-006A3.1 era-neutral setting capability composition proof
+add_executable(
+    openvic-simulation-setting-composition-proof
+    world-scale/SettingCompositionProof.cpp
+)
+
+target_link_libraries(
+    openvic-simulation-setting-composition-proof
+    PRIVATE
+        openvic::simulation
+)
+
+set_target_properties(
+    openvic-simulation-setting-composition-proof
+    PROPERTIES
+        OUTPUT_NAME "openvic-simulation.setting-composition-proof"
+)
