@@ -1,4 +1,4 @@
-﻿#include "openvic-simulation/core/random/RandomGenerator.hpp"
+#include "openvic-simulation/core/random/RandomGenerator.hpp"
 #include "openvic-simulation/country/CountryDefinition.hpp"
 #include "openvic-simulation/country/CountryInstance.hpp"
 #include "openvic-simulation/country/CountryInstanceDeps.hpp"
@@ -13,6 +13,7 @@
 #include "openvic-simulation/economy/trading/GoodMarket.hpp"
 #include "openvic-simulation/economy/trading/MarketInstance.hpp"
 #include "openvic-simulation/environment/ProvinceEnvironmentalState.hpp"
+#include "openvic-simulation/environment/ProvinceSoilWaterBalance.hpp"
 #include "openvic-simulation/map/ProvinceDefinition.hpp"
 #include "openvic-simulation/map/ProvinceInstance.hpp"
 #include "openvic-simulation/map/ProvinceInstanceDeps.hpp"
@@ -1054,4 +1055,156 @@ TEST_CASE(
     CHECK(first.health_vulnerability_pressure == fixed_point_t::_0);
     CHECK(first.burden >= fixed_point_t::_0);
     CHECK(first.burden <= fixed_point_t::_1);
+}
+
+TEST_CASE(
+    "006B2.2 persistent soil-water depletion propagates into native food scarcity",
+    "[convergence][006b2][006b2.2][environment][agriculture][market][population]"
+) {
+    ProvinceSoilWaterState const initial {
+        .capacity = fixed_point_t { 100 },
+        .storage = fixed_point_t { 100 }
+    };
+
+    ProvinceSoilWaterForcing const dry {
+        .evapotranspiration_demand = fixed_point_t { 25 }
+    };
+
+    auto const first =
+        advance_province_soil_water_balance(initial, dry);
+
+    REQUIRE(first.valid());
+
+    auto const second =
+        advance_province_soil_water_balance(first.ending, dry);
+
+    REQUIRE(second.valid());
+
+    CHECK(first.ending.storage == fixed_point_t { 75 });
+    CHECK(second.ending.storage == fixed_point_t { 50 });
+
+    FoodNeedsFixture first_stage {
+        first.environmental_state.get_water_availability()
+    };
+
+    FoodNeedsFixture second_stage {
+        second.environmental_state.get_water_availability()
+    };
+
+    auto const first_food = first_stage.run_cycle();
+    auto const second_food = second_stage.run_cycle();
+
+    CHECK(first_food.output == fixed_point_t { 6 });
+    CHECK(second_food.output == fixed_point_t { 4 });
+
+    CHECK(second_food.output < first_food.output);
+    CHECK(second_food.market_supply < first_food.market_supply);
+
+    CHECK(
+        second_food.life_needs_fulfilled
+        < first_food.life_needs_fulfilled
+    );
+}
+
+TEST_CASE(
+    "006B2.2 rainfall return does not erase stored drought damage immediately",
+    "[convergence][006b2][006b2.2][environment][agriculture][recovery]"
+) {
+    ProvinceSoilWaterState const drought {
+        .capacity = fixed_point_t { 100 },
+        .storage = fixed_point_t { 50 }
+    };
+
+    ProvinceSoilWaterForcing const recovery {
+        .precipitation = fixed_point_t { 20 },
+        .evapotranspiration_demand = fixed_point_t { 10 }
+    };
+
+    auto const recovered =
+        advance_province_soil_water_balance(
+            drought,
+            recovery
+        );
+
+    REQUIRE(recovered.valid());
+
+    CHECK(
+        recovered.ending.storage
+        == fixed_point_t { 60 }
+    );
+
+    CHECK(
+        recovered.environmental_state.get_water_availability()
+        < fixed_point_t::_1
+    );
+
+    FoodNeedsFixture normal {
+        fixed_point_t::_1
+    };
+
+    FoodNeedsFixture recovering {
+        recovered.environmental_state.get_water_availability()
+    };
+
+    auto const normal_food = normal.run_cycle();
+    auto const recovering_food = recovering.run_cycle();
+
+    CHECK(
+        recovering_food.output
+        < normal_food.output
+    );
+
+    CHECK(
+        recovering_food.market_supply
+        < normal_food.market_supply
+    );
+}
+
+TEST_CASE(
+    "006B2.2 identical environmental trajectories reproduce identical native food outcomes",
+    "[convergence][006b2][006b2.2][environment][determinism]"
+) {
+    ProvinceSoilWaterState const initial {
+        .capacity = fixed_point_t { 100 },
+        .storage = fixed_point_t { 90 }
+    };
+
+    ProvinceSoilWaterForcing const forcing {
+        .precipitation = fixed_point_t { 5 },
+        .surface_runoff = fixed_point_t { 1 },
+        .evapotranspiration_demand = fixed_point_t { 24 }
+    };
+
+    auto const first =
+        advance_province_soil_water_balance(
+            initial,
+            forcing
+        );
+
+    auto const second =
+        advance_province_soil_water_balance(
+            initial,
+            forcing
+        );
+
+    REQUIRE(first.valid());
+    REQUIRE(second.valid());
+
+    CHECK(first == second);
+
+    FoodNeedsFixture first_world {
+        first.environmental_state.get_water_availability()
+    };
+
+    FoodNeedsFixture second_world {
+        second.environmental_state.get_water_availability()
+    };
+
+    auto const first_result =
+        first_world.run_cycle();
+
+    auto const second_result =
+        second_world.run_cycle();
+
+    CHECK(first_result == second_result);
 }
