@@ -96,11 +96,11 @@ InstanceManager::InstanceManager(
 		market_instance,
 		pops_aggregate_deps,
 		setting_capabilities == nullptr
-			|| setting_capabilities->has("population.nutrition-health")
+			|| setting_capabilities->has(setting_capability::POPULATION_NUTRITION_HEALTH)
 	},
 	enable_live_aggregate_production_chain {
 		setting_capabilities == nullptr
-			|| setting_capabilities->has("economy.aggregate-production-chain")
+			|| setting_capabilities->has(setting_capability::ECONOMY_AGGREGATE_PRODUCTION_CHAIN)
 	},
 	rgo_deps {
 		market_instance,

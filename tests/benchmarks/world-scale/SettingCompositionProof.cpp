@@ -1,4 +1,4 @@
-﻿#include <cstdint>
+#include <cstdint>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -131,8 +131,8 @@ int main() {
 
 	std::cout
 		<< "{\n"
-		<< "  \"increment\": \"PROJECT-CONVERGENCE-006A3.1\",\n"
-		<< "  \"scope\": \"era-neutral-setting-capability-manifest\",\n"
+		<< "  \"increment\": \"PROJECT-CONVERGENCE-006A3.2\",\n"
+		<< "  \"scope\": \"era-neutral-setting-capability-contract\",\n"
 		<< "  \"packages\": {\n"
 		<< "    \"reference_bronze_age\": {\n"
 		<< "      \"capability_count\": " << bronze.capabilities.size() << ",\n"
@@ -159,9 +159,9 @@ int main() {
 		<< "  },\n"
 		<< "  \"limitations\": [\n"
 		<< "    \"reference package IDs are test data and are not engine era enums\",\n"
-		<< "    \"this increment proves canonical capability composition but does not yet route all runtime construction through the manifest\",\n"
-		<< "    \"only population.nutrition-health already has an existing concrete optional runtime seam\",\n"
-		<< "    \"future 006A3 increments must bind additional existing mechanisms without creating parallel authorities\"\n"
+		<< "    \"this increment proves canonical capability composition plus dependency-contract validation for currently bound optional mechanisms\",\n"
+		<< "    \"population.nutrition-health and economy.aggregate-production-chain have concrete runtime composition seams\",\n"
+		<< "    \"additional mechanisms must be runtime-bound only when they have clean ownership seams and without creating parallel authorities\"\n"
 		<< "  ]\n"
 		<< "}\n";
 

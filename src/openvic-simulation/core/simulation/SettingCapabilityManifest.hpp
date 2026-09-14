@@ -1,12 +1,34 @@
-﻿#pragma once
+#pragma once
 
 #include <algorithm>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace OpenVic {
+
+/*
+ * Engine-owned capability identifiers used by implemented composition seams
+ * and their dependency contract. These are era-neutral data-facing names,
+ * not historical-era enums and not declarations that every named mechanism
+ * is implemented.
+ */
+namespace setting_capability {
+	inline constexpr std::string_view POPULATION_BASIC = "population.basic";
+	inline constexpr std::string_view POPULATION_NUTRITION_HEALTH = "population.nutrition-health";
+	inline constexpr std::string_view PRODUCTION_BASIC = "production.basic";
+	inline constexpr std::string_view TRADE_PHYSICAL = "trade.physical";
+	inline constexpr std::string_view ECONOMY_AGGREGATE_PRODUCTION_CHAIN = "economy.aggregate-production-chain";
+}
+
+struct SettingCapabilityDependencyFailure final {
+	std::string_view capability;
+	std::string_view required_capability;
+
+	bool operator==(SettingCapabilityDependencyFailure const&) const = default;
+};
 
 /*
  * Canonical, era-neutral setting capability manifest.
@@ -82,6 +104,56 @@ struct SettingCapabilityManifest final {
 				return std::string_view { lhs } < std::string_view { rhs };
 			}
 		);
+	}
+
+	/*
+	 * PROJECT-CONVERGENCE-006A3.2
+	 *
+	 * Validate only dependencies owned by mechanisms that already possess a
+	 * real runtime composition seam. Future/declarative capability names remain
+	 * legal until their owning domain exists and adds its own contract rules.
+	 */
+	[[nodiscard]] std::optional<SettingCapabilityDependencyFailure>
+	first_dependency_failure() const {
+		if (!is_canonical()) {
+			return std::nullopt;
+		}
+
+		if (
+			has(setting_capability::POPULATION_NUTRITION_HEALTH)
+			&& !has(setting_capability::POPULATION_BASIC)
+		) {
+			return SettingCapabilityDependencyFailure {
+				.capability = setting_capability::POPULATION_NUTRITION_HEALTH,
+				.required_capability = setting_capability::POPULATION_BASIC
+			};
+		}
+
+		if (has(setting_capability::ECONOMY_AGGREGATE_PRODUCTION_CHAIN)) {
+			if (!has(setting_capability::PRODUCTION_BASIC)) {
+				return SettingCapabilityDependencyFailure {
+					.capability = setting_capability::ECONOMY_AGGREGATE_PRODUCTION_CHAIN,
+					.required_capability = setting_capability::PRODUCTION_BASIC
+				};
+			}
+
+			if (!has(setting_capability::TRADE_PHYSICAL)) {
+				return SettingCapabilityDependencyFailure {
+					.capability = setting_capability::ECONOMY_AGGREGATE_PRODUCTION_CHAIN,
+					.required_capability = setting_capability::TRADE_PHYSICAL
+				};
+			}
+		}
+
+		return std::nullopt;
+	}
+
+	[[nodiscard]] bool dependencies_are_satisfied() const {
+		return is_canonical() && !first_dependency_failure().has_value();
+	}
+
+	[[nodiscard]] bool is_valid_contract() const {
+		return is_canonical() && dependencies_are_satisfied();
 	}
 
 	[[nodiscard]] std::uint64_t checksum() const {

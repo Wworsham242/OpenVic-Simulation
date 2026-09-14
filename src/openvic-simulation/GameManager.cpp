@@ -286,16 +286,30 @@ bool GameManager::setup_native_instance(NativeInstanceBootstrap bootstrap) {
 
 	SPDLOG_INFO("Initialising native game instance.");
 
-		SettingCapabilityManifest const* setting_capabilities = nullptr;
+	SettingCapabilityManifest const* setting_capabilities = nullptr;
 	if (bootstrap.setting_capabilities) {
 		if (!bootstrap.setting_capabilities->is_canonical()) {
 			spdlog::error_s("Native setting capability manifest is not canonical.");
 			return false;
 		}
+
+		if (
+			auto const dependency_failure =
+				bootstrap.setting_capabilities->first_dependency_failure();
+			dependency_failure.has_value()
+		) {
+			spdlog::error_s(
+				"Native setting capability '{}' requires '{}'.",
+				dependency_failure->capability,
+				dependency_failure->required_capability
+			);
+			return false;
+		}
+
 		setting_capabilities = &*bootstrap.setting_capabilities;
 	}
 
-finalize_instance_definition_registries();
+	finalize_instance_definition_registries();
 
 	instance_manager.emplace(
 		game_rules_manager,
