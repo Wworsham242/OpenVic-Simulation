@@ -2056,3 +2056,239 @@ TEST_CASE(
 
 	CHECK_FALSE(negative_delay.has_value());
 }
+TEST_CASE(
+	"Bronze and modern institutions share general actor authority without country identity",
+	"[convergence][actor-institution][006A5]"
+) {
+	GameManager manager {
+		[]() {},
+		[]() -> uint64_t { return 0; },
+		[]() -> uint64_t { return 0; }
+	};
+
+	auto const data_root =
+		std::filesystem::path { __FILE__ }.parent_path().parent_path()
+		/ "data" / "native-ruleset-bootstrap";
+
+	REQUIRE(manager.load_native_economy_bootstrap(data_root));
+	REQUIRE(manager.setup_native_instance());
+
+	InstanceManager* const instance = manager.get_instance_manager();
+	REQUIRE(instance != nullptr);
+
+	REQUIRE(
+		instance->register_actor_authority(
+			ActorAuthorityProfile {
+				.actor_id = "bronze.palace-granary",
+				.grants = {
+					AuthorityGrant {
+						.command_type = "resource.release-grain",
+						.jurisdiction_id = "storehouse:uruk"
+					}
+				}
+			}
+		)
+	);
+
+	REQUIRE(
+		instance->register_actor_authority(
+			ActorAuthorityProfile {
+				.actor_id = "modern.central-bank-board",
+				.grants = {
+					AuthorityGrant {
+						.command_type = "policy.set-rate-guidance",
+						.jurisdiction_id = "monetary-area:test"
+					}
+				}
+			}
+		)
+	);
+ObservationReport bronze_report {
+.recipient_actor_id = "bronze.palace-granary",
+.source_id = "messenger.storehouse",
+.fact_type = "resource.grain-pressure",
+.subject_id = "storehouse:uruk",
+.observed_at = SimTime::from_ticks(0),
+.deliver_at = SimTime::from_ticks(48),
+.payload = { 1u },
+.integrity = ObservationIntegrity::ESTIMATED,
+.confidence_basis_points = 8'000
+};
+
+auto const bronze_report_sequence =
+instance->submit_actor_observation_report(std::move(bronze_report));
+
+REQUIRE(bronze_report_sequence.has_value());
+ObservationReport modern_report {
+.recipient_actor_id = "modern.central-bank-board",
+.source_id = "statistics.current",
+.fact_type = "economy.inflation-pressure",
+.subject_id = "monetary-area:test",
+.observed_at = SimTime::from_ticks(0),
+.deliver_at = SimTime::from_ticks(24),
+.payload = { 2u },
+.integrity = ObservationIntegrity::DIRECT,
+.confidence_basis_points = 10'000
+};
+
+auto const modern_report_sequence =
+instance->submit_actor_observation_report(std::move(modern_report));
+
+REQUIRE(modern_report_sequence.has_value());
+
+	REQUIRE(instance->start_game_session());
+
+	instance->force_tick_and_update();
+	CHECK(instance->get_simulation_time() == SimTime::from_ticks(24));
+
+	CHECK(
+		instance->get_actor_knowledge(
+			"bronze.palace-granary",
+			"resource.grain-pressure",
+			"storehouse:uruk"
+		) == nullptr
+	);
+
+	ActorKnowledgeRecord const* const modern_knowledge =
+		instance->get_actor_knowledge(
+			"modern.central-bank-board",
+			"economy.inflation-pressure",
+			"monetary-area:test"
+		);
+
+	REQUIRE(modern_knowledge != nullptr);
+	SimTime const expected_modern_received = SimTime::from_ticks(24);
+CHECK(modern_knowledge->received_at == expected_modern_received);
+
+	CHECK(
+		instance->submit_authorized_command(
+			"modern.central-bank-board",
+			"policy.set-rate-guidance",
+			"monetary-area:test",
+			{ 4u }
+		) == CommandAdmissionResult::accepted
+	);
+
+	CHECK(
+		instance->submit_authorized_command(
+			"bronze.palace-granary",
+			"policy.set-rate-guidance",
+			"monetary-area:test",
+			{ 9u }
+		) == CommandAdmissionResult::unauthorized
+	);
+
+	instance->force_tick_and_update();
+	CHECK(instance->get_simulation_time() == SimTime::from_ticks(48));
+
+	ActorKnowledgeRecord const* const bronze_knowledge =
+		instance->get_actor_knowledge(
+			"bronze.palace-granary",
+			"resource.grain-pressure",
+			"storehouse:uruk"
+		);
+
+	REQUIRE(bronze_knowledge != nullptr);
+	SimTime const expected_bronze_received = SimTime::from_ticks(48);
+CHECK(bronze_knowledge->received_at == expected_bronze_received);
+
+	CHECK(
+		instance->submit_authorized_command(
+			"bronze.palace-granary",
+			"resource.release-grain",
+			"storehouse:uruk",
+			{ 7u }
+		) == CommandAdmissionResult::accepted
+	);
+
+	CHECK(
+		instance->submit_authorized_command(
+			"modern.central-bank-board",
+			"resource.release-grain",
+			"storehouse:uruk",
+			{ 8u }
+		) == CommandAdmissionResult::unauthorized
+	);
+
+	CHECK(
+		instance->submit_authorized_command(
+			"country:pretend-country",
+			"resource.release-grain",
+			"storehouse:uruk",
+			{}
+		) == CommandAdmissionResult::unknown_actor
+	);
+
+	CHECK(instance->get_accepted_command_count() == 2);
+
+	auto const accepted = instance->capture_accepted_command_log();
+	REQUIRE(accepted.size() == 2);
+
+	CHECK(accepted[0].actor_id == "modern.central-bank-board");
+	CHECK(accepted[0].command_type == "policy.set-rate-guidance");
+	CHECK(accepted[0].jurisdiction_id == "monetary-area:test");
+	CHECK(accepted[0].submitted_at == SimTime::from_ticks(24));
+
+	CHECK(accepted[1].actor_id == "bronze.palace-granary");
+	CHECK(accepted[1].command_type == "resource.release-grain");
+	CHECK(accepted[1].jurisdiction_id == "storehouse:uruk");
+	CHECK(accepted[1].submitted_at == SimTime::from_ticks(48));
+}
+
+TEST_CASE(
+	"General institution authority remains independent of player position occupancy",
+	"[convergence][actor-institution][006A5]"
+) {
+	GameManager manager {
+		[]() {},
+		[]() -> uint64_t { return 0; },
+		[]() -> uint64_t { return 0; }
+	};
+
+	auto const data_root =
+		std::filesystem::path { __FILE__ }.parent_path().parent_path()
+		/ "data" / "native-ruleset-bootstrap";
+
+	REQUIRE(manager.load_native_economy_bootstrap(data_root));
+	REQUIRE(manager.setup_native_instance());
+
+	InstanceManager* const instance = manager.get_instance_manager();
+	REQUIRE(instance != nullptr);
+
+	REQUIRE(
+		instance->register_actor_authority(
+			ActorAuthorityProfile {
+				.actor_id = "institution.test-agency",
+				.grants = {
+					AuthorityGrant {
+						.command_type = "institution.issue-order",
+						.jurisdiction_id = "district:test"
+					}
+				}
+			}
+		)
+	);
+
+	CHECK(
+		instance->submit_occupied_position_command(
+			"institution.issue-order",
+			{ 1u }
+		) == CommandAdmissionResult::invalid_request
+	);
+
+	CHECK(
+		instance->submit_authorized_command(
+			"institution.test-agency",
+			"institution.issue-order",
+			"district:test",
+			{ 1u }
+		) == CommandAdmissionResult::accepted
+	);
+
+	CHECK(instance->get_accepted_command_count() == 1);
+
+	auto const accepted = instance->capture_accepted_command_log();
+	REQUIRE(accepted.size() == 1);
+	CHECK(accepted[0].actor_id == "institution.test-agency");
+	CHECK(accepted[0].jurisdiction_id == "district:test");
+}
